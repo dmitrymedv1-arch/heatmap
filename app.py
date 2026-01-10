@@ -3,75 +3,62 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import io
 import re
 import zipfile
 import matplotlib.pyplot as plt
 import matplotlib
-from typing import List, Optional, Tuple
+from scipy import stats
 from scipy.ndimage import gaussian_filter
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+import warnings
+warnings.filterwarnings('ignore')
 
 # Page configuration
 st.set_page_config(
-    page_title="Heatmap Generator",
+    page_title="Advanced Scientific Heatmap Generator",
     page_icon="🔥",
     layout="wide"
 )
 
-# Data processing functions
+# ==================== DATA PROCESSING FUNCTIONS ====================
 def preprocess_uploaded_content(content: str) -> str:
-    """
-    Preprocess uploaded content for handling incomplete cases
-    """
+    """Preprocess uploaded content for handling incomplete cases"""
     lines = content.strip().split('\n')
     processed_lines = []
     last_x_value = None
     
     for line in lines:
-        # Skip empty lines
         if not line.strip():
             continue
             
-        # Remove extra spaces
         line = line.strip()
         
-        # Split the line into parts
         if '\t' in line:
             parts = line.split('\t')
         elif ',' in line:
             parts = line.split(',')
         else:
-            # Split by multiple spaces
             parts = re.split(r'\s+', line)
         
-        # Remove empty elements
         parts = [p.strip() for p in parts if p.strip()]
         
         if len(parts) >= 3:
-            # Complete string with X, Y and Value
             processed_lines.append(f"{parts[0]},{parts[1]},{parts[2]}")
             last_x_value = parts[0]
         elif len(parts) == 2:
-            # Handle cases with missing X values
             if last_x_value is not None:
                 processed_lines.append(f"{last_x_value},{parts[0]},{parts[1]}")
-            else:
-                # If X is not previously defined, use first value as X
-                processed_lines.append(f"{parts[0]},{parts[1]},NaN")
-        elif len(parts) == 1:
-            # Single value - treat as continuation
-            continue
     
     return '\n'.join(processed_lines)
 
 def parse_data(content: str) -> pd.DataFrame:
-    """
-    Parse data from string to DataFrame with robust type handling
-    """
-    # Preprocess data
+    """Parse data from string to DataFrame with robust type handling"""
     processed_content = preprocess_uploaded_content(content)
     
-    # Try to parse as CSV with different delimiters
     df = None
     for delimiter in [',', '\t', ';', ' ']:
         try:
@@ -82,7 +69,6 @@ def parse_data(content: str) -> pd.DataFrame:
                 engine='python',
                 names=['X', 'Y', 'Value']
             )
-            # Check if we have at least 3 columns
             if df.shape[1] >= 3:
                 df = df.iloc[:, :3]
                 df.columns = ['X', 'Y', 'Value']
@@ -91,100 +77,378 @@ def parse_data(content: str) -> pd.DataFrame:
             continue
     
     if df is None or df.empty:
-        st.error("Failed to parse data. Please check the format.")
         return None
     
-    # Keep original string representation for X and Y
     df['X'] = df['X'].astype(str)
     df['Y'] = df['Y'].astype(str)
     
-    # Try to convert Value to numeric, preserving non-numeric values
     try:
         df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
-        if df['Value'].isna().any():
-            st.warning("Some values could not be converted to numbers. These will be treated as NaN.")
-    except Exception as e:
-        st.warning(f"Could not convert values to numeric format: {e}")
+    except:
         df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     
-    # Create numeric versions for sorting if possible
     df['X_numeric'] = pd.to_numeric(df['X'], errors='coerce')
     df['Y_numeric'] = pd.to_numeric(df['Y'], errors='coerce')
     
-    # Remove rows with NaN values in X or Y
     df = df.dropna(subset=['X', 'Y'])
     
     return df
 
 def create_pivot_table(df: pd.DataFrame, sort_numerically: bool = True) -> pd.DataFrame:
-    """
-    Create pivot table for heatmap
-    """
+    """Create pivot table for heatmap with optional clustering"""
     if df is None or df.empty:
         return None
     
-    # Create pivot table
     pivot_df = df.pivot_table(index='Y', columns='X', values='Value', aggfunc='mean')
     
-    # Apply sorting if requested and possible
     if sort_numerically:
-        # Try to sort X columns numerically
         try:
-            # Extract unique X values with their numeric equivalents
             x_values = df[['X', 'X_numeric']].drop_duplicates().dropna(subset=['X_numeric'])
             if not x_values.empty:
                 x_sorted = x_values.sort_values('X_numeric')['X'].tolist()
-                # Keep only columns that exist in pivot_df
                 x_sorted = [x for x in x_sorted if x in pivot_df.columns]
-                # Reorder columns
                 pivot_df = pivot_df[x_sorted]
         except:
             pass
         
-        # Try to sort Y rows numerically
         try:
-            # Extract unique Y values with their numeric equivalents
             y_values = df[['Y', 'Y_numeric']].drop_duplicates().dropna(subset=['Y_numeric'])
             if not y_values.empty:
                 y_sorted = y_values.sort_values('Y_numeric')['Y'].tolist()
-                # Keep only indices that exist in pivot_df
                 y_sorted = [y for y in y_sorted if y in pivot_df.index]
-                # Reorder rows
                 pivot_df = pivot_df.loc[y_sorted]
         except:
             pass
     
     return pivot_df
 
-def normalize_data(pivot_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize data (0-1)
-    """
+def normalize_data(pivot_df: pd.DataFrame, method: str = 'minmax') -> pd.DataFrame:
+    """Normalize data using different methods"""
     if pivot_df is None or pivot_df.empty:
         return None
     
-    # Remove NaN values for min/max calculation
     valid_values = pivot_df.values[~np.isnan(pivot_df.values)]
-    
     if len(valid_values) == 0:
         return pivot_df
     
-    min_val = np.min(valid_values)
-    max_val = np.max(valid_values)
+    if method == 'minmax':
+        min_val = np.min(valid_values)
+        max_val = np.max(valid_values)
+        if max_val == min_val:
+            return pivot_df
+        normalized_df = (pivot_df - min_val) / (max_val - min_val)
     
-    if max_val == min_val:
-        return pivot_df
+    elif method == 'zscore':
+        mean_val = np.mean(valid_values)
+        std_val = np.std(valid_values)
+        if std_val == 0:
+            return pivot_df
+        normalized_df = (pivot_df - mean_val) / std_val
     
-    # Normalization
-    normalized_df = (pivot_df - min_val) / (max_val - min_val)
+    elif method == 'log10':
+        if np.min(valid_values) <= 0:
+            offset = abs(np.min(valid_values)) + 1
+            normalized_df = np.log10(pivot_df + offset)
+        else:
+            normalized_df = np.log10(pivot_df)
+    
+    elif method == 'percentile':
+        normalized_df = pivot_df.rank(axis=1, pct=True)
+    
+    elif method == 'robust':
+        from sklearn.preprocessing import RobustScaler
+        scaler = RobustScaler()
+        normalized_values = scaler.fit_transform(pivot_df.values)
+        normalized_df = pd.DataFrame(normalized_values, 
+                                   index=pivot_df.index, 
+                                   columns=pivot_df.columns)
+    
     return normalized_df
 
-def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis', 
-                         smoothing_level: float = 1.0, show_contour_lines: bool = True,
+# ==================== STATISTICAL FUNCTIONS ====================
+def calculate_statistics(pivot_df: pd.DataFrame):
+    """Calculate various statistics for rows and columns"""
+    stats_dict = {}
+    
+    # Row statistics
+    stats_dict['row_means'] = pivot_df.mean(axis=1, skipna=True)
+    stats_dict['row_stds'] = pivot_df.std(axis=1, skipna=True)
+    stats_dict['row_medians'] = pivot_df.median(axis=1, skipna=True)
+    stats_dict['row_q25'] = pivot_df.quantile(0.25, axis=1)
+    stats_dict['row_q75'] = pivot_df.quantile(0.75, axis=1)
+    stats_dict['row_min'] = pivot_df.min(axis=1, skipna=True)
+    stats_dict['row_max'] = pivot_df.max(axis=1, skipna=True)
+    
+    # Column statistics
+    stats_dict['col_means'] = pivot_df.mean(axis=0, skipna=True)
+    stats_dict['col_stds'] = pivot_df.std(axis=0, skipna=True)
+    stats_dict['col_medians'] = pivot_df.median(axis=0, skipna=True)
+    stats_dict['col_min'] = pivot_df.min(axis=0, skipna=True)
+    stats_dict['col_max'] = pivot_df.max(axis=0, skipna=True)
+    
+    # Global statistics
+    stats_dict['global_mean'] = pivot_df.values[~np.isnan(pivot_df.values)].mean()
+    stats_dict['global_std'] = pivot_df.values[~np.isnan(pivot_df.values)].std()
+    stats_dict['global_min'] = pivot_df.values[~np.isnan(pivot_df.values)].min()
+    stats_dict['global_max'] = pivot_df.values[~np.isnan(pivot_df.values)].max()
+    
+    return stats_dict
+
+def calculate_correlations(pivot_df: pd.DataFrame):
+    """Calculate correlation matrix"""
+    if pivot_df is None or len(pivot_df) < 2:
+        return None
+    
+    # Handle NaN values
+    data_for_corr = pivot_df.fillna(pivot_df.mean())
+    
+    # Calculate correlation matrix
+    corr_matrix = data_for_corr.corr()
+    
+    return corr_matrix
+
+def perform_statistical_tests(pivot_df: pd.DataFrame, group1_indices=None, group2_indices=None):
+    """Perform statistical tests between groups"""
+    results = {}
+    
+    if group1_indices is None or group2_indices is None:
+        # Default: compare first half vs second half
+        n_rows = len(pivot_df)
+        group1_indices = list(range(0, n_rows//2))
+        group2_indices = list(range(n_rows//2, n_rows))
+    
+    # Extract data for groups
+    group1_data = pivot_df.iloc[group1_indices].values.flatten()
+    group2_data = pivot_df.iloc[group2_indices].values.flatten()
+    
+    # Remove NaN values
+    group1_data = group1_data[~np.isnan(group1_data)]
+    group2_data = group2_data[~np.isnan(group2_data)]
+    
+    if len(group1_data) > 1 and len(group2_data) > 1:
+        # t-test
+        t_stat, p_value = stats.ttest_ind(group1_data, group2_data)
+        results['t_test'] = {'statistic': t_stat, 'p_value': p_value}
+        
+        # Mann-Whitney U test
+        u_stat, p_value_mw = stats.mannwhitneyu(group1_data, group2_data)
+        results['mann_whitney'] = {'statistic': u_stat, 'p_value': p_value_mw}
+        
+        # Effect size (Cohen's d)
+        n1, n2 = len(group1_data), len(group2_data)
+        pooled_std = np.sqrt(((n1-1)*np.var(group1_data) + (n2-1)*np.var(group2_data)) / (n1+n2-2))
+        cohens_d = (np.mean(group1_data) - np.mean(group2_data)) / pooled_std
+        results['effect_size'] = {'cohens_d': cohens_d}
+    
+    return results
+
+# ==================== CLUSTERING FUNCTIONS ====================
+def perform_clustering(pivot_df: pd.DataFrame, n_clusters: int = 3, method: str = 'kmeans'):
+    """Perform clustering on rows"""
+    if pivot_df is None or len(pivot_df) < n_clusters:
+        return None
+    
+    # Handle NaN values
+    data_for_clustering = pivot_df.fillna(pivot_df.mean())
+    
+    # Standardize data
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(data_for_clustering)
+    
+    if method == 'kmeans':
+        # Perform k-means clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        cluster_labels = kmeans.fit_predict(scaled_data)
+        
+    elif method == 'hierarchical':
+        # Perform hierarchical clustering
+        Z = linkage(scaled_data, method='ward')
+        cluster_labels = fcluster(Z, n_clusters, criterion='maxclust') - 1
+    
+    return cluster_labels
+
+def perform_biclustering(pivot_df: pd.DataFrame):
+    """Simple biclustering visualization"""
+    if pivot_df is None:
+        return None
+    
+    # Simple reordering based on hierarchical clustering
+    from scipy.cluster.hierarchy import leaves_list
+    
+    # Row clustering
+    row_data = pivot_df.fillna(pivot_df.mean()).values
+    row_linkage = linkage(row_data, method='ward')
+    row_order = leaves_list(row_linkage)
+    
+    # Column clustering
+    col_data = pivot_df.fillna(pivot_df.mean()).T.values
+    col_linkage = linkage(col_data, method='ward')
+    col_order = leaves_list(col_linkage)
+    
+    return row_order, col_order
+
+# ==================== VISUALIZATION FUNCTIONS ====================
+def create_basic_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                        x_label: str = "X", y_label: str = "Y",
+                        colorbar_title: str = "Value",
+                        show_values: bool = False,
+                        value_format: str = ".2f"):
+    """Create basic heatmap with all original features"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Prepare data
+    plot_data = pivot_df.values.copy()
+    
+    # Create text for cells if requested
+    if show_values:
+        text_matrix = np.empty_like(plot_data, dtype=object)
+        for i in range(text_matrix.shape[0]):
+            for j in range(text_matrix.shape[1]):
+                value = plot_data[i, j]
+                if np.isnan(value):
+                    text_matrix[i, j] = ""
+                else:
+                    text_matrix[i, j] = format(value, value_format)
+    else:
+        text_matrix = None
+    
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=plot_data,
+        x=pivot_df.columns.tolist(),
+        y=pivot_df.index.tolist(),
+        colorscale=colorscale,
+        text=text_matrix,
+        texttemplate='%{text}' if text_matrix is not None else None,
+        hoverongaps=False,
+        hoverinfo='x+y+z',
+        colorbar=dict(
+            title=dict(
+                text=colorbar_title,
+                font=dict(color='black', size=12)
+            ),
+            tickfont=dict(color='black', size=10),
+            orientation='v',
+            x=1.02,
+            xpad=20,
+            len=0.8
+        ),
+        xgap=1,
+        ygap=1
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text="Heatmap",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        xaxis=dict(
+            title=dict(
+                text=x_label,
+                font=dict(color='black', size=14)
+            ),
+            tickfont=dict(color='black', size=12),
+            gridcolor='black',
+            linecolor='black',
+            mirror=True,
+            showline=True,
+            zeroline=False,
+            showgrid=False,
+            type='category',
+            tickangle=45
+        ),
+        yaxis=dict(
+            title=dict(
+                text=y_label,
+                font=dict(color='black', size=14)
+            ),
+            tickfont=dict(color='black', size=12),
+            gridcolor='black',
+            linecolor='black',
+            mirror=True,
+            showline=True,
+            zeroline=False,
+            showgrid=False,
+            type='category'
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=800,
+        height=600,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    return fig
+
+def create_normalized_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                             x_label: str = "X", y_label: str = "Y",
+                             colorbar_title: str = "Value",
+                             normalization_method: str = 'minmax'):
+    """Create normalized heatmap"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Normalize data
+    normalized_df = normalize_data(pivot_df, normalization_method)
+    
+    if normalized_df is None:
+        return None
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=normalized_df.values,
+        x=normalized_df.columns.tolist(),
+        y=normalized_df.index.tolist(),
+        colorscale=colorscale,
+        hoverongaps=False,
+        colorbar=dict(
+            title=dict(
+                text=f"{colorbar_title} ({normalization_method})",
+                font=dict(color='black', size=12)
+            ),
+            tickfont=dict(color='black', size=10),
+            orientation='v',
+            x=1.02,
+            xpad=20
+        ),
+        xgap=1,
+        ygap=1
+    ))
+    
+    fig.update_layout(
+        title=dict(
+            text=f"Normalized Heatmap ({normalization_method})",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        xaxis=dict(
+            title=dict(text=x_label, font=dict(color='black', size=14)),
+            tickfont=dict(color='black', size=12),
+            tickangle=45
+        ),
+        yaxis=dict(
+            title=dict(text=y_label, font=dict(color='black', size=14)),
+            tickfont=dict(color='black', size=12)
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=800,
+        height=600,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    return fig
+
+def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                         smoothing_level: float = 1.0,
+                         show_contour_lines: bool = True,
                          show_contour_labels: bool = True) -> go.Figure:
-    """
-    Create smooth contour plot (height map) with adjustable smoothing
-    """
+    """Create smooth contour plot with all original features"""
+    
     if pivot_df is None or pivot_df.empty:
         return None
     
@@ -193,28 +457,17 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
     y = list(range(len(pivot_df.index)))
     z = pivot_df.values
     
-    # Handle NaN values by filling with nearest neighbors
+    # Handle NaN values
     if np.isnan(z).any():
-        from scipy import interpolate
-        x_grid, y_grid = np.meshgrid(np.arange(z.shape[1]), np.arange(z.shape[0]))
-        # Get valid points
-        valid_mask = ~np.isnan(z)
-        if valid_mask.any():
-            interp = interpolate.LinearNDInterpolator(
-                list(zip(x_grid[valid_mask], y_grid[valid_mask])), 
-                z[valid_mask]
-            )
-            z = interp(x_grid, y_grid)
-        # Fill any remaining NaN with 0
         z = np.nan_to_num(z)
     
-    # Apply smoothing if requested
+    # Apply smoothing
     if smoothing_level > 0:
         z_smoothed = gaussian_filter(z, sigma=smoothing_level)
     else:
         z_smoothed = z
     
-    # Create figure with filled contours
+    # Create contour plot
     fig = go.Figure(data=go.Contour(
         z=z_smoothed,
         x=x,
@@ -223,7 +476,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
         contours=dict(
             showlabels=show_contour_labels,
             labelfont=dict(size=12, color='black'),
-            coloring='heatmap',  # Always use heatmap for fill
+            coloring='heatmap',  # Always filled
             showlines=show_contour_lines,
         ),
         line=dict(width=1 if show_contour_lines else 0),
@@ -233,7 +486,10 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 text='Value',
                 font=dict(color='black', size=12)
             ),
-            tickfont=dict(color='black')
+            tickfont=dict(color='black', size=10),
+            orientation='v',
+            x=1.02,
+            xpad=20
         )
     ))
     
@@ -245,7 +501,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
             text='X',
             font=dict(color='black', size=14)
         ),
-        tickfont=dict(color='black'),
+        tickfont=dict(color='black', size=12),
         gridcolor='black',
         linecolor='black',
         mirror=True,
@@ -262,7 +518,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
             text='Y',
             font=dict(color='black', size=14)
         ),
-        tickfont=dict(color='black'),
+        tickfont=dict(color='black', size=12),
         gridcolor='black',
         linecolor='black',
         mirror=True,
@@ -276,18 +532,17 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
         title='Contour Map',
         plot_bgcolor='white',
         paper_bgcolor='white',
-        width=600,
-        height=500
+        width=800,
+        height=600,
+        margin=dict(l=50, r=100, t=50, b=100)
     )
     
     return fig
 
-def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis', 
-                           x_label: str = "X", y_label: str = "Y", 
-                           colorbar_title: str = "Value") -> List[Tuple[str, go.Figure]]:
-    """
-    Create additional visualization plots
-    """
+def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                           x_label: str = "X", y_label: str = "Y",
+                           colorbar_title: str = "Value") -> List:
+    """Create all additional plots from original code"""
     plots = []
     
     # Handle NaN values
@@ -315,7 +570,7 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                     text=colorbar_title,
                     font=dict(color='black', size=12)
                 ),
-                tickfont=dict(color='black')
+                tickfont=dict(color='black', size=10)
             )
         ))
 
@@ -326,26 +581,26 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                     title=dict(text=x_label, font=dict(color='black', size=12)),
                     ticktext=pivot_df.columns.tolist(),
                     tickvals=list(range(len(pivot_df.columns))),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 ),
                 yaxis=dict(
                     title=dict(text=y_label, font=dict(color='black', size=12)),
                     ticktext=pivot_df.index.tolist(),
                     tickvals=list(range(len(pivot_df.index))),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 ),
                 zaxis=dict(
                     title=dict(text=colorbar_title, font=dict(color='black', size=12)),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 ),
                 aspectmode='manual',
                 aspectratio=dict(x=1, y=1, z=0.7)
             ),
-            width=600,
-            height=500,
-            margin=dict(l=0, r=0, b=0, t=30)
+            width=800,
+            height=600,
+            margin=dict(l=0, r=0, b=0, t=50)
         )
-        plots.append(('3D Surface', fig_3d))
+        plots.append(('3D Surface Plot', fig_3d))
     
     # 2. Wireframe Plot
     if len(pivot_df.columns) > 1 and len(pivot_df.index) > 1:
@@ -364,11 +619,10 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                     text=colorbar_title,
                     font=dict(color='black', size=12)
                 ),
-                tickfont=dict(color='black')
+                tickfont=dict(color='black', size=10)
             )
         ))
         
-        # Update wireframe appearance
         fig_wire.update_traces(contours_z=dict(show=True, usecolormap=True, project_z=True))
 
         fig_wire.update_layout(
@@ -378,25 +632,25 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                     title=dict(text=x_label, font=dict(color='black', size=12)),
                     ticktext=pivot_df.columns.tolist(),
                     tickvals=list(range(len(pivot_df.columns))),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 ),
                 yaxis=dict(
                     title=dict(text=y_label, font=dict(color='black', size=12)),
                     ticktext=pivot_df.index.tolist(),
                     tickvals=list(range(len(pivot_df.index))),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 ),
                 zaxis=dict(
                     title=dict(text=colorbar_title, font=dict(color='black', size=12)),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 )
             ),
-            width=600,
-            height=500
+            width=800,
+            height=600
         )
-        plots.append(('3D Wireframe', fig_wire))
+        plots.append(('3D Wireframe Plot', fig_wire))
     
-    # 3. Density Heatmap (2D histogram style)
+    # 3. Density Heatmap
     fig_density = go.Figure(data=go.Heatmap(
         z=z_data,
         x=pivot_df.columns.tolist(),
@@ -408,7 +662,7 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 text=colorbar_title,
                 font=dict(color='black', size=12)
             ),
-            tickfont=dict(color='black')
+            tickfont=dict(color='black', size=10)
         ),
         xgap=0.5,
         ygap=0.5
@@ -421,20 +675,21 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 text=x_label,
                 font=dict(color='black', size=14)
             ),
-            tickfont=dict(color='black'),
+            tickfont=dict(color='black', size=12),
             gridcolor='black',
             linecolor='black',
             mirror=True,
             showline=True,
             zeroline=False,
-            showgrid=False
+            showgrid=False,
+            tickangle=45
         ),
         yaxis=dict(
             title=dict(
                 text=y_label,
                 font=dict(color='black', size=14)
             ),
-            tickfont=dict(color='black'),
+            tickfont=dict(color='black', size=12),
             gridcolor='black',
             linecolor='black',
             mirror=True,
@@ -444,23 +699,20 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
         ),
         plot_bgcolor='white',
         paper_bgcolor='white',
-        width=600,
-        height=500
+        width=800,
+        height=600
     )
     plots.append(('Density Heatmap', fig_density))
     
-    # 4. Gradient Vector Field (simplified)
+    # 4. Gradient Vector Field
     if len(pivot_df.columns) > 2 and len(pivot_df.index) > 2 and not np.isnan(z_data).any():
         try:
-            # Calculate gradients
             grad_y, grad_x = np.gradient(z_data)
-            
-            # Create quiver plot
             X, Y = np.meshgrid(np.arange(len(pivot_df.columns)), np.arange(len(pivot_df.index)))
             
             fig_gradient = go.Figure()
             
-            # Add heatmap as background
+            # Heatmap background
             fig_gradient.add_trace(go.Heatmap(
                 z=z_data,
                 x=pivot_df.columns.tolist(),
@@ -473,11 +725,11 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                         text=colorbar_title,
                         font=dict(color='black', size=12)
                     ),
-                    tickfont=dict(color='black')
+                    tickfont=dict(color='black', size=10)
                 )
             ))
             
-            # Add gradient vectors (simplified representation)
+            # Gradient vectors
             skip = max(1, len(pivot_df.columns) // 10)
             for i in range(0, len(pivot_df.index), skip):
                 for j in range(0, len(pivot_df.columns), skip):
@@ -489,7 +741,6 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                             line=dict(color='white', width=2),
                             showlegend=False
                         ))
-                        # Add arrow head
                         fig_gradient.add_trace(go.Scatter(
                             x=[j + grad_x[i, j] * 0.3],
                             y=[i + grad_y[i, j] * 0.3],
@@ -502,15 +753,16 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 title='Gradient Field Overlay',
                 xaxis=dict(
                     title=x_label,
-                    tickfont=dict(color='black'),
+                    tickfont=dict(color='black', size=12),
                     gridcolor='black',
                     linecolor='black',
                     mirror=True,
-                    showline=True
+                    showline=True,
+                    tickangle=45
                 ),
                 yaxis=dict(
                     title=y_label,
-                    tickfont=dict(color='black'),
+                    tickfont=dict(color='black', size=12),
                     gridcolor='black',
                     linecolor='black',
                     mirror=True,
@@ -518,975 +770,1177 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 ),
                 plot_bgcolor='white',
                 paper_bgcolor='white',
-                width=600,
-                height=500,
+                width=800,
+                height=600,
                 showlegend=False
             )
             plots.append(('Gradient Field', fig_gradient))
-        except Exception as e:
-            st.info(f"Gradient plot skipped: {e}")
+        except:
+            pass
     
     return plots
 
-def save_all_plots_matplotlib(pivot_df, normalized_df, x_label, y_label, colorbar_title, 
-                             additional_plots_data, dpi=300, show_values=True):
-    """Save all plots using matplotlib"""
+# ==================== ADVANCED VISUALIZATION FUNCTIONS ====================
+def create_marginal_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                           x_label: str = "X", y_label: str = "Y",
+                           colorbar_title: str = "Value",
+                           show_row_stats: bool = True,
+                           show_col_stats: bool = True,
+                           show_dendrograms: bool = False,
+                           cluster_data: bool = False,
+                           n_clusters: int = 3):
+    """Create heatmap with marginal plots (ggside-like functionality)"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Calculate statistics
+    stats_data = calculate_statistics(pivot_df)
+    
+    # Perform clustering if requested
+    cluster_labels = None
+    if cluster_data:
+        cluster_labels = perform_clustering(pivot_df, n_clusters)
+    
+    # Create subplot grid
+    if show_dendrograms:
+        fig = make_subplots(
+            rows=2, cols=2,
+            column_widths=[0.85, 0.15],
+            row_heights=[0.15, 0.85],
+            vertical_spacing=0.02,
+            horizontal_spacing=0.02,
+            shared_xaxes=True,
+            shared_yaxes=True
+        )
+    else:
+        fig = make_subplots(
+            rows=2, cols=2,
+            column_widths=[0.85, 0.15],
+            row_heights=[0.15, 0.85],
+            vertical_spacing=0.02,
+            horizontal_spacing=0.02,
+            shared_xaxes=True,
+            shared_yaxes=True
+        )
+    
+    # Main heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot_df.values,
+            x=pivot_df.columns.tolist(),
+            y=pivot_df.index.tolist(),
+            colorscale=colorscale,
+            showscale=True,
+            colorbar=dict(
+                title=dict(
+                    text=colorbar_title,
+                    font=dict(color='black', size=12)
+                ),
+                tickfont=dict(color='black', size=10),
+                orientation='v',
+                x=1.02
+            ),
+            xgap=1,
+            ygap=1
+        ),
+        row=2, col=1
+    )
+    
+    # Row statistics (right side)
+    if show_row_stats and stats_data is not None:
+        fig.add_trace(
+            go.Bar(
+                x=stats_data['row_means'].values,
+                y=pivot_df.index.tolist(),
+                orientation='h',
+                marker=dict(color='lightblue', line=dict(color='black', width=1)),
+                name='Row Means',
+                showlegend=False
+            ),
+            row=2, col=2
+        )
+    
+    # Column statistics (top side)
+    if show_col_stats and stats_data is not None:
+        fig.add_trace(
+            go.Bar(
+                x=pivot_df.columns.tolist(),
+                y=stats_data['col_means'].values,
+                marker=dict(color='lightcoral', line=dict(color='black', width=1)),
+                name='Column Means',
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+    
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text="Heatmap with Marginal Statistics",
+            font=dict(size=18, color='black'),
+            x=0.5
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=1000,
+        height=700,
+        showlegend=False,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    # Update axes
+    fig.update_xaxes(
+        row=2, col=1,
+        title=dict(text=x_label, font=dict(color='black', size=14)),
+        tickfont=dict(color='black', size=12),
+        showgrid=False,
+        tickangle=45
+    )
+    
+    fig.update_yaxes(
+        row=2, col=1,
+        title=dict(text=y_label, font=dict(color='black', size=14)),
+        tickfont=dict(color='black', size=12),
+        showgrid=False
+    )
+    
+    # Hide axes for marginal plots
+    fig.update_xaxes(row=1, col=1, showticklabels=False, title_text="")
+    fig.update_yaxes(row=2, col=2, showticklabels=False, title_text="")
+    
+    return fig
+
+def create_statistical_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                              statistical_method: str = 'pvalue'):
+    """Create heatmap with statistical annotations"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Create figure with statistical annotations
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot_df.values,
+        x=pivot_df.columns.tolist(),
+        y=pivot_df.index.tolist(),
+        colorscale=colorscale,
+        hoverongaps=False,
+        colorbar=dict(
+            title=dict(
+                text=f'Value ({statistical_method})',
+                font=dict(color='black', size=12)
+            ),
+            tickfont=dict(color='black', size=10)
+        )
+    ))
+    
+    # Add statistical annotations if needed
+    if statistical_method == 'zscore':
+        # Calculate z-scores
+        z_scores = (pivot_df - pivot_df.mean()) / pivot_df.std()
+        # Add annotation for significant z-scores
+        for i in range(len(pivot_df.index)):
+            for j in range(len(pivot_df.columns)):
+                if abs(z_scores.iloc[i, j]) > 2:
+                    fig.add_annotation(
+                        x=j,
+                        y=i,
+                        text="*",
+                        showarrow=False,
+                        font=dict(color='white', size=14)
+                    )
+    
+    fig.update_layout(
+        title=dict(
+            text=f"Statistical Heatmap ({statistical_method})",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        xaxis=dict(
+            tickfont=dict(color='black', size=12),
+            title_font=dict(color='black', size=14),
+            tickangle=45
+        ),
+        yaxis=dict(
+            tickfont=dict(color='black', size=12),
+            title_font=dict(color='black', size=14)
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=800,
+        height=600,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    return fig
+
+def create_clustered_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
+                            n_clusters: int = 3, show_dendrogram: bool = True):
+    """Create heatmap with clustering"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Perform clustering
+    cluster_labels = perform_clustering(pivot_df, n_clusters)
+    
+    if cluster_labels is None:
+        return create_basic_heatmap(pivot_df, colorscale)
+    
+    # Sort data by cluster labels
+    sorted_indices = np.argsort(cluster_labels)
+    sorted_data = pivot_df.iloc[sorted_indices]
+    sorted_labels = cluster_labels[sorted_indices]
+    
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=sorted_data.values,
+        x=sorted_data.columns.tolist(),
+        y=sorted_data.index.tolist(),
+        colorscale=colorscale,
+        colorbar=dict(
+            title=dict(
+                text='Value',
+                font=dict(color='black', size=12)
+            ),
+            tickfont=dict(color='black', size=10)
+        )
+    ))
+    
+    # Add cluster annotations
+    unique_clusters = np.unique(sorted_labels)
+    colors = px.colors.qualitative.Set3[:len(unique_clusters)]
+    
+    # Add cluster annotations on the side
+    current_idx = 0
+    for cluster_id in unique_clusters:
+        cluster_size = np.sum(sorted_labels == cluster_id)
+        if cluster_size > 0:
+            fig.add_annotation(
+                x=-0.5,
+                y=current_idx + cluster_size/2,
+                text=f"Cluster {int(cluster_id) + 1}",
+                showarrow=False,
+                font=dict(color='black', size=12, family="Arial Black"),
+                bgcolor=colors[int(cluster_id) % len(colors)],
+                opacity=0.8,
+                xref="x",
+                yref="y"
+            )
+            current_idx += cluster_size
+    
+    fig.update_layout(
+        title=dict(
+            text=f"Clustered Heatmap (k={n_clusters})",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        xaxis=dict(
+            tickfont=dict(color='black', size=12),
+            title_font=dict(color='black', size=14),
+            tickangle=45
+        ),
+        yaxis=dict(
+            tickfont=dict(color='black', size=12),
+            title_font=dict(color='black', size=14)
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=900,
+        height=600,
+        margin=dict(l=100, r=100, t=50, b=100)
+    )
+    
+    return fig
+
+def create_correlation_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'RdBu'):
+    """Create correlation matrix heatmap"""
+    
+    if pivot_df is None:
+        return None
+    
+    # Calculate correlation matrix
+    corr_matrix = calculate_correlations(pivot_df)
+    
+    if corr_matrix is None:
+        return None
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_matrix.values,
+        x=corr_matrix.columns.tolist(),
+        y=corr_matrix.index.tolist(),
+        colorscale=colorscale,
+        zmid=0,
+        colorbar=dict(
+            title=dict(
+                text='Correlation',
+                font=dict(color='black', size=12)
+            ),
+            tickfont=dict(color='black', size=10)
+        )
+    ))
+    
+    # Add correlation values as text
+    for i in range(len(corr_matrix.index)):
+        for j in range(len(corr_matrix.columns)):
+            fig.add_annotation(
+                x=j,
+                y=i,
+                text=f"{corr_matrix.iloc[i, j]:.2f}",
+                showarrow=False,
+                font=dict(
+                    color='white' if abs(corr_matrix.iloc[i, j]) > 0.5 else 'black',
+                    size=10
+                )
+            )
+    
+    fig.update_layout(
+        title=dict(
+            text="Correlation Matrix",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        xaxis=dict(
+            tickfont=dict(color='black', size=12),
+            tickangle=45
+        ),
+        yaxis=dict(
+            tickfont=dict(color='black', size=12)
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=800,
+        height=600,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    return fig
+
+def create_time_series_heatmap(pivot_df: pd.DataFrame, colorscale: str = 'viridis'):
+    """Create heatmap for time series data"""
+    
+    if pivot_df is None or pivot_df.empty:
+        return None
+    
+    # Create subplots for heatmap and trends
+    fig = make_subplots(
+        rows=1, cols=2,
+        column_widths=[0.7, 0.3],
+        subplot_titles=('Time Series Heatmap', 'Sample Trends'),
+        horizontal_spacing=0.1
+    )
+    
+    # Heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot_df.values,
+            x=pivot_df.columns.tolist(),
+            y=pivot_df.index.tolist(),
+            colorscale=colorscale,
+            colorbar=dict(
+                title=dict(
+                    text='Value',
+                    font=dict(color='black', size=12)
+                ),
+                tickfont=dict(color='black', size=10)
+            )
+        ),
+        row=1, col=1
+    )
+    
+    # Trend lines for selected rows
+    n_samples = min(5, len(pivot_df))
+    sample_indices = np.linspace(0, len(pivot_df)-1, n_samples, dtype=int)
+    
+    for idx in sample_indices:
+        row_data = pivot_df.iloc[idx].values
+        row_name = pivot_df.index[idx]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(row_data))),
+                y=row_data,
+                mode='lines+markers',
+                name=f'{row_name}',
+                line=dict(width=2),
+                marker=dict(size=8)
+            ),
+            row=1, col=2
+        )
+    
+    fig.update_layout(
+        title=dict(
+            text="Time Series Analysis",
+            font=dict(size=16, color='black'),
+            x=0.5
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=1200,
+        height=600,
+        showlegend=True,
+        margin=dict(l=50, r=100, t=50, b=100)
+    )
+    
+    fig.update_xaxes(title_text="Time Points", row=1, col=1, 
+                    tickfont=dict(color='black', size=12),
+                    tickangle=45)
+    fig.update_yaxes(title_text="Samples", row=1, col=1, 
+                    tickfont=dict(color='black', size=12))
+    fig.update_xaxes(title_text="Time", row=1, col=2, 
+                    tickfont=dict(color='black', size=12))
+    fig.update_yaxes(title_text="Value", row=1, col=2, 
+                    tickfont=dict(color='black', size=12))
+    
+    return fig
+
+# ==================== EXPORT FUNCTIONS ====================
+def save_all_plots_matplotlib(pivot_df, normalized_df, x_label, y_label, 
+                             colorbar_title, additional_plots, dpi=300, 
+                             show_values=True):
+    """Save all plots as high-resolution PNG files"""
+    
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # 1. Main Heatmap
-        fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
+        plot_counter = 1
         
-        # Handle NaN values
+        # 1. Main Heatmap
+        fig, ax = plt.subplots(figsize=(12, 10), dpi=dpi)
         plot_data = pivot_df.values.copy()
         if np.isnan(plot_data).any():
             plot_data = np.nan_to_num(plot_data)
         
-        # Create heatmap
-        im = ax.imshow(plot_data, aspect='auto', cmap='viridis', 
+        im = ax.imshow(plot_data, aspect='auto', cmap='viridis',
                       extent=[0, len(pivot_df.columns), 0, len(pivot_df.index)])
         
-        # Set ticks and labels
         ax.set_xticks(np.arange(len(pivot_df.columns)) + 0.5)
         ax.set_yticks(np.arange(len(pivot_df.index)) + 0.5)
         ax.set_xticklabels(pivot_df.columns.tolist())
         ax.set_yticklabels(pivot_df.index.tolist())
         
-        # Rotate x labels for better visibility
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
         
-        # Add colorbar with vertical orientation
         cbar = plt.colorbar(im, ax=ax, orientation='vertical')
-        cbar.set_label(colorbar_title, rotation=270, labelpad=20, fontsize=12, color='black')
-        cbar.ax.tick_params(colors='black')
+        cbar.set_label(colorbar_title, rotation=270, labelpad=25, fontsize=14, color='black')
+        cbar.ax.tick_params(colors='black', labelsize=12)
         cbar.ax.yaxis.label.set_color('black')
         
-        # Set labels with black color
-        ax.set_xlabel(x_label, fontsize=14, color='black')
-        ax.set_ylabel(y_label, fontsize=14, color='black')
-        ax.set_title('Main Heatmap', fontsize=16, color='black')
+        ax.set_xlabel(x_label, fontsize=16, color='black', labelpad=15)
+        ax.set_ylabel(y_label, fontsize=16, color='black', labelpad=15)
+        ax.set_title('Main Heatmap', fontsize=18, color='black', pad=20)
         
-        # Set axis colors
         ax.spines['bottom'].set_color('black')
         ax.spines['top'].set_color('black')
         ax.spines['left'].set_color('black')
         ax.spines['right'].set_color('black')
-        ax.tick_params(axis='x', colors='black')
-        ax.tick_params(axis='y', colors='black')
+        ax.tick_params(axis='x', colors='black', labelsize=12)
+        ax.tick_params(axis='y', colors='black', labelsize=12)
         
-        # Add grid
-        ax.grid(False)
-        
-        # Add values to cells if requested
         if show_values:
             for i in range(len(pivot_df.index)):
                 for j in range(len(pivot_df.columns)):
                     value = pivot_df.values[i, j]
                     if not np.isnan(value):
-                        text = ax.text(j + 0.5, i + 0.5, f'{value:.2f}',
-                                      ha="center", va="center", color="w", fontsize=8)
+                        ax.text(j + 0.5, i + 0.5, f'{value:.2f}',
+                              ha="center", va="center", 
+                              color="white" if value > np.nanmean(plot_data) else "black",
+                              fontsize=9, fontweight='bold')
         
         plt.tight_layout()
-        
-        # Save to buffer
-        heatmap_buffer = io.BytesIO()
-        fig.savefig(heatmap_buffer, format='png', dpi=dpi, bbox_inches='tight')
-        zip_file.writestr('1_heatmap_main.png', heatmap_buffer.getvalue())
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr(f'{plot_counter:02d}_main_heatmap.png', buffer.getvalue())
         plt.close(fig)
+        plot_counter += 1
         
-        # 2. Normalized Heatmap (if available)
+        # 2. Normalized Heatmap
         if normalized_df is not None:
-            fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
-            
+            fig, ax = plt.subplots(figsize=(12, 10), dpi=dpi)
             norm_data = normalized_df.values.copy()
             if np.isnan(norm_data).any():
                 norm_data = np.nan_to_num(norm_data)
-                
-            im = ax.imshow(norm_data, aspect='auto', cmap='viridis', 
-                          vmin=0, vmax=1,
+            
+            im = ax.imshow(norm_data, aspect='auto', cmap='viridis',
                           extent=[0, len(normalized_df.columns), 0, len(normalized_df.index)])
             
-            # Set ticks and labels
             ax.set_xticks(np.arange(len(normalized_df.columns)) + 0.5)
             ax.set_yticks(np.arange(len(normalized_df.index)) + 0.5)
             ax.set_xticklabels(normalized_df.columns.tolist())
             ax.set_yticklabels(normalized_df.index.tolist())
             
-            # Rotate x labels for better visibility
             plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
             
-            # Add colorbar with vertical orientation
             cbar = plt.colorbar(im, ax=ax, orientation='vertical')
-            cbar.set_label(f'{colorbar_title} (normalized)', rotation=270, labelpad=20, fontsize=12, color='black')
-            cbar.ax.tick_params(colors='black')
-            cbar.ax.yaxis.label.set_color('black')
+            cbar.set_label(f'{colorbar_title} (normalized)', rotation=270, 
+                          labelpad=25, fontsize=14, color='black')
+            cbar.ax.tick_params(colors='black', labelsize=12)
             
-            # Set labels with black color
-            ax.set_xlabel(x_label, fontsize=14, color='black')
-            ax.set_ylabel(y_label, fontsize=14, color='black')
-            ax.set_title('Normalized Heatmap (0-1)', fontsize=16, color='black')
+            ax.set_xlabel(x_label, fontsize=16, color='black', labelpad=15)
+            ax.set_ylabel(y_label, fontsize=16, color='black', labelpad=15)
+            ax.set_title('Normalized Heatmap', fontsize=18, color='black', pad=20)
             
-            # Set axis colors
             ax.spines['bottom'].set_color('black')
             ax.spines['top'].set_color('black')
             ax.spines['left'].set_color('black')
             ax.spines['right'].set_color('black')
-            ax.tick_params(axis='x', colors='black')
-            ax.tick_params(axis='y', colors='black')
+            ax.tick_params(axis='x', colors='black', labelsize=12)
+            ax.tick_params(axis='y', colors='black', labelsize=12)
             
-            # Add grid
-            ax.grid(False)
-            
-            # Add values to cells if requested
             if show_values:
                 for i in range(len(normalized_df.index)):
                     for j in range(len(normalized_df.columns)):
                         value = normalized_df.values[i, j]
                         if not np.isnan(value):
-                            text = ax.text(j + 0.5, i + 0.5, f'{value:.3f}',
-                                          ha="center", va="center", color="w", fontsize=8)
+                            ax.text(j + 0.5, i + 0.5, f'{value:.3f}',
+                                  ha="center", va="center", 
+                                  color="white" if value > 0.5 else "black",
+                                  fontsize=9, fontweight='bold')
             
             plt.tight_layout()
-            
-            # Save to buffer
-            norm_buffer = io.BytesIO()
-            fig.savefig(norm_buffer, format='png', dpi=dpi, bbox_inches='tight')
-            zip_file.writestr('2_heatmap_normalized.png', norm_buffer.getvalue())
+            buffer = io.BytesIO()
+            fig.savefig(buffer, format='png', dpi=dpi, bbox_inches='tight')
+            zip_file.writestr(f'{plot_counter:02d}_normalized_heatmap.png', buffer.getvalue())
             plt.close(fig)
+            plot_counter += 1
         
         # 3. Contour Plot
-        fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
-        
-        # Handle NaN values for contour
+        fig, ax = plt.subplots(figsize=(12, 10), dpi=dpi)
         contour_data = pivot_df.values.copy()
         if np.isnan(contour_data).any():
             contour_data = np.nan_to_num(contour_data)
         
-        # Create meshgrid for contour plot
         X, Y = np.meshgrid(np.arange(len(pivot_df.columns)) + 0.5, 
                           np.arange(len(pivot_df.index)) + 0.5)
         
-        # Create contour plot
         contour = ax.contourf(X, Y, contour_data, cmap='viridis', levels=20)
-        
-        # Add contour lines
         ax.contour(X, Y, contour_data, colors='black', linewidths=0.5, levels=10)
         
-        # Set ticks and labels
         ax.set_xticks(np.arange(len(pivot_df.columns)) + 0.5)
         ax.set_yticks(np.arange(len(pivot_df.index)) + 0.5)
         ax.set_xticklabels(pivot_df.columns.tolist())
         ax.set_yticklabels(pivot_df.index.tolist())
         
-        # Rotate x labels for better visibility
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
         
-        # Add colorbar with vertical orientation
         cbar = plt.colorbar(contour, ax=ax, orientation='vertical')
-        cbar.set_label(colorbar_title, rotation=270, labelpad=20, fontsize=12, color='black')
-        cbar.ax.tick_params(colors='black')
-        cbar.ax.yaxis.label.set_color('black')
+        cbar.set_label(colorbar_title, rotation=270, labelpad=25, fontsize=14, color='black')
+        cbar.ax.tick_params(colors='black', labelsize=12)
         
-        # Set labels with black color
-        ax.set_xlabel(x_label, fontsize=14, color='black')
-        ax.set_ylabel(y_label, fontsize=14, color='black')
-        ax.set_title('Contour Plot', fontsize=16, color='black')
+        ax.set_xlabel(x_label, fontsize=16, color='black', labelpad=15)
+        ax.set_ylabel(y_label, fontsize=16, color='black', labelpad=15)
+        ax.set_title('Contour Plot', fontsize=18, color='black', pad=20)
         
-        # Set axis colors
         ax.spines['bottom'].set_color('black')
         ax.spines['top'].set_color('black')
         ax.spines['left'].set_color('black')
         ax.spines['right'].set_color('black')
-        ax.tick_params(axis='x', colors='black')
-        ax.tick_params(axis='y', colors='black')
+        ax.tick_params(axis='x', colors='black', labelsize=12)
+        ax.tick_params(axis='y', colors='black', labelsize=12)
         
         plt.tight_layout()
-        
-        # Save to buffer
-        contour_buffer = io.BytesIO()
-        fig.savefig(contour_buffer, format='png', dpi=dpi, bbox_inches='tight')
-        zip_file.writestr('3_contour_plot.png', contour_buffer.getvalue())
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr(f'{plot_counter:02d}_contour_plot.png', buffer.getvalue())
         plt.close(fig)
+        plot_counter += 1
         
-        # 4-7. Additional plots from additional_plots_data
-        for idx, (plot_name, plot_fig) in enumerate(additional_plots_data):
-            # Convert plotly figure to matplotlib for saving
-            fig_mpl, ax_mpl = plt.subplots(figsize=(10, 8), dpi=dpi)
-            
-            if plot_name == 'Density Heatmap':
-                # For density heatmap
-                data_to_plot = pivot_df.values.copy()
-                if np.isnan(data_to_plot).any():
-                    data_to_plot = np.nan_to_num(data_to_plot)
-                
-                im = ax_mpl.imshow(data_to_plot, aspect='auto', cmap='viridis',
-                                  extent=[0, len(pivot_df.columns), 0, len(pivot_df.index)])
-                
-                ax_mpl.set_xticks(np.arange(len(pivot_df.columns)) + 0.5)
-                ax_mpl.set_yticks(np.arange(len(pivot_df.index)) + 0.5)
-                ax_mpl.set_xticklabels(pivot_df.columns.tolist())
-                ax_mpl.set_yticklabels(pivot_df.index.tolist())
-                
-                plt.setp(ax_mpl.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-                
-                cbar = plt.colorbar(im, ax=ax_mpl, orientation='vertical')
-                cbar.set_label(colorbar_title, rotation=270, labelpad=20, fontsize=12, color='black')
-                cbar.ax.tick_params(colors='black')
-                cbar.ax.yaxis.label.set_color('black')
-                
-                ax_mpl.set_xlabel(x_label, fontsize=14, color='black')
-                ax_mpl.set_ylabel(y_label, fontsize=14, color='black')
-                ax_mpl.set_title(plot_name, fontsize=16, color='black')
-                
-            elif plot_name in ['3D Surface', '3D Wireframe']:
-                # For 3D plots, create a 2D projection
-                data_to_plot = pivot_df.values.copy()
-                if np.isnan(data_to_plot).any():
-                    data_to_plot = np.nan_to_num(data_to_plot)
-                
-                # Create a pseudo-3D view using imshow with shading
-                im = ax_mpl.imshow(data_to_plot, aspect='auto', cmap='viridis')
-                
-                ax_mpl.set_xticks(np.arange(len(pivot_df.columns)))
-                ax_mpl.set_yticks(np.arange(len(pivot_df.index)))
-                ax_mpl.set_xticklabels(pivot_df.columns.tolist())
-                ax_mpl.set_yticklabels(pivot_df.index.tolist())
-                
-                plt.setp(ax_mpl.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-                
-                cbar = plt.colorbar(im, ax=ax_mpl, orientation='vertical')
-                cbar.set_label(colorbar_title, rotation=270, labelpad=20, fontsize=12, color='black')
-                cbar.ax.tick_params(colors='black')
-                cbar.ax.yaxis.label.set_color('black')
-                
-                ax_mpl.set_xlabel(x_label, fontsize=14, color='black')
-                ax_mpl.set_ylabel(y_label, fontsize=14, color='black')
-                ax_mpl.set_title(f"{plot_name} (2D Projection)", fontsize=16, color='black')
-            
-            elif plot_name == 'Gradient Field':
-                # Skip gradient field for matplotlib export as it's complex
-                continue
-            
-            # Set axis colors
-            ax_mpl.spines['bottom'].set_color('black')
-            ax_mpl.spines['top'].set_color('black')
-            ax_mpl.spines['left'].set_color('black')
-            ax_mpl.spines['right'].set_color('black')
-            ax_mpl.tick_params(axis='x', colors='black')
-            ax_mpl.tick_params(axis='y', colors='black')
-            ax_mpl.grid(False)
-            
-            plt.tight_layout()
-            
-            # Save to buffer
-            plot_buffer = io.BytesIO()
-            fig_mpl.savefig(plot_buffer, format='png', dpi=dpi, bbox_inches='tight')
-            zip_file.writestr(f'{idx+4}_{plot_name.lower().replace(" ", "_")}.png', plot_buffer.getvalue())
-            plt.close(fig_mpl)
+        # Additional plots
+        for plot_name, plot_fig in additional_plots:
+            if plot_fig is not None:
+                try:
+                    # Convert plotly to image
+                    if hasattr(plot_fig, 'to_image'):
+                        img_bytes = plot_fig.to_image(format="png", width=1600, height=1200)
+                        zip_file.writestr(f'{plot_counter:02d}_{plot_name.lower().replace(" ", "_")}.png', img_bytes)
+                        plot_counter += 1
+                except:
+                    continue
         
-        # 8. Data table as image
-        fig, ax = plt.subplots(figsize=(12, 8), dpi=dpi)
+        # Data table
+        fig, ax = plt.subplots(figsize=(14, 10), dpi=dpi)
         ax.axis('tight')
         ax.axis('off')
         
-        # Create table with formatted values
         table_data = []
-        for i in range(len(pivot_df.index)):
+        for i in range(min(50, len(pivot_df.index))):  # Limit rows for readability
             row = []
-            for j in range(len(pivot_df.columns)):
+            for j in range(min(20, len(pivot_df.columns))):  # Limit columns
                 value = pivot_df.values[i, j]
-                if np.isnan(value):
-                    row.append('NaN')
-                else:
-                    row.append(f'{value:.3f}')
+                row.append(f'{value:.3f}' if not np.isnan(value) else 'NaN')
             table_data.append(row)
         
+        row_labels = pivot_df.index.tolist()[:50]
+        col_labels = pivot_df.columns.tolist()[:20]
+        
         table = ax.table(cellText=table_data,
-                        rowLabels=pivot_df.index.tolist(),
-                        colLabels=pivot_df.columns.tolist(),
+                        rowLabels=row_labels,
+                        colLabels=col_labels,
                         cellLoc='center',
                         loc='center')
         
         table.auto_set_font_size(False)
         table.set_fontsize(8)
-        table.scale(1, 1.5)
+        table.scale(1.2, 1.5)
         
-        # Set table colors
         for key, cell in table.get_celld().items():
             cell.set_text_props(color='black')
+            if key[0] == 0:  # Header
+                cell.set_facecolor('#4B8BBE')
+                cell.set_text_props(color='white', weight='bold')
+            elif key[1] == -1:  # Row labels
+                cell.set_facecolor('#F0F0F0')
         
-        ax.set_title('Data Table', fontsize=16, pad=20, color='black')
-        
+        ax.set_title('Data Table (First 50 rows × 20 columns)', fontsize=16, pad=20, color='black')
         plt.tight_layout()
         
-        # Save to buffer
-        table_buffer = io.BytesIO()
-        fig.savefig(table_buffer, format='png', dpi=dpi, bbox_inches='tight')
-        zip_file.writestr('8_data_table.png', table_buffer.getvalue())
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr(f'{plot_counter:02d}_data_table.png', buffer.getvalue())
         plt.close(fig)
     
     return zip_buffer
 
-# Main interface
-st.title("🔥 Heatmap Generator for Scientific Publications")
+# ==================== MAIN APPLICATION ====================
+st.title("🔥 Advanced Scientific Heatmap Generator")
 st.markdown("""
-Upload data in X,Y,Value format (comma, tab or space separated) or use example data.
-Values will be displayed in their original order.
+Generate publication-ready heatmaps with advanced statistical analysis and visualization features.
+All features are optional and can be customized for your specific needs.
 """)
 
-# Sidebar for settings
+# Initialize session state
+if 'all_plots' not in st.session_state:
+    st.session_state.all_plots = {}
+if 'additional_plots' not in st.session_state:
+    st.session_state.additional_plots = []
+
+# Sidebar with all settings
 with st.sidebar:
-    st.header("Plot Settings")
+    st.header("⚙️ Core Settings")
     
-    # Axis settings
-    st.subheader("Axis Settings")
-    x_label = st.text_input("X-axis label", value="X")
-    y_label = st.text_input("Y-axis label", value="Y")
+    col1, col2 = st.columns(2)
+    with col1:
+        x_label = st.text_input("X-axis label", value="X")
+    with col2:
+        y_label = st.text_input("Y-axis label", value="Y")
+    
     colorbar_title = st.text_input("Colorbar title", value="Value")
     
-    # Display options
-    st.subheader("Display Options")
-    sort_numerically = st.checkbox("Sort axes numerically", value=True, 
-                                   help="If unchecked, axes will be displayed in the order they appear in the data")
+    # Data processing
+    st.subheader("📊 Data Processing")
+    sort_numerically = st.checkbox("Sort axes numerically", value=True)
+    show_values = st.checkbox("Show values in cells", value=False)
     
-    # Font settings
-    st.subheader("Font Settings")
-    axis_font_size = st.slider("Axis font size", 8, 24, 14)
-    tick_font_size = st.slider("Tick font size", 8, 20, 12)
-    colorbar_font_size = st.slider("Colorbar font size", 8, 20, 12)
-    
-    # Display settings
-    st.subheader("Data Display")
-    show_values = st.checkbox("Show values in cells", value=True)
-    value_format = st.selectbox("Value format", 
-                               ["Auto", "Integer", "Two decimals", "Three decimals", "Scientific"])
-    
-    # Color palette selection
-    st.subheader("Color Palette")
-    
-    # Built-in Plotly palettes
-    builtin_palettes = [
-        "Viridis", "Plasma", "Inferno", "Magma", "Cividis",
-        "Greys", "RdBu", "RdYlBu", "Picnic", "Rainbow",
-        "Portland", "Jet", "Hot", "Blackbody", "Electric"
-    ]
-    
-    selected_palette = st.selectbox("Select palette", builtin_palettes, index=0)
-    
-    # Custom palette
-    st.markdown("---")
-    st.subheader("Custom Palette")
-    use_custom_palette = st.checkbox("Use custom palette")
-    
-    custom_colors = []
-    if use_custom_palette:
-        color_count = st.slider("Number of colors in palette", 2, 10, 3)
-        for i in range(color_count):
-            color = st.color_picker(f"Color {i+1}", value="#%06x" % (i * 255 // color_count))
-            custom_colors.append(color)
-    
-    # Contour map settings
-    st.markdown("---")
-    st.subheader("Contour Map Settings")
-    contour_smoothing = st.slider("Smoothing level", 0.0, 3.0, 1.0, 0.1,
-                                 help="0 = no smoothing (sharp boundaries), 3 = maximum smoothing")
-    show_contour_lines = st.checkbox("Show contour lines", value=True)
-    show_contour_labels = st.checkbox("Show contour labels", value=True)
-    
-    # Additional plots settings
-    st.markdown("---")
-    st.subheader("Additional Plots")
-    show_normalized = st.checkbox("Show normalized plot", value=True)
-    show_contour = st.checkbox("Show contour map", value=True)
-    show_additional = st.checkbox("Show additional plots", value=True)
-    
-    # Save settings
-    st.markdown("---")
-    st.subheader("Save Settings")
-    save_dpi = st.slider("DPI for saving", 100, 600, 300)
-
-# Main area
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.header("Data Upload")
-    
-    # Example data
-    example_choice = st.selectbox(
-        "Select example data",
-        ["Upload your own data", "Example 1: Simple", "Example 2: Temperature data", 
-         "Example 3: With gaps", "Example 4: Negative values"]
+    value_format = st.selectbox(
+        "Value format",
+        [".0f", ".1f", ".2f", ".3f", ".2e"]
     )
     
-    if example_choice == "Example 1: Simple":
-        example_data = """X,Y,Value
-A,Jan,10
+    # Color settings
+    st.subheader("🎨 Color Settings")
+    builtin_palettes = ["Viridis", "Plasma", "Inferno", "Magma", "Cividis",
+                       "RdBu", "RdYlBu", "Rainbow", "Portland", "Jet",
+                       "Greys", "Hot", "Electric", "Blues", "Greens"]
+    selected_palette = st.selectbox("Color palette", builtin_palettes, index=0)
+    
+    # Normalization
+    normalization_method = st.selectbox(
+        "Normalization method",
+        ["None", "minmax", "zscore", "log10", "percentile", "robust"]
+    )
+    
+    # Original plots selection
+    st.header("📈 Original Plots")
+    show_normalized = st.checkbox("Show normalized heatmap", value=True)
+    show_contour = st.checkbox("Show contour map", value=True)
+    show_additional = st.checkbox("Show additional plots (3D, Gradient, etc.)", value=True)
+    
+    if show_contour:
+        st.subheader("Contour Settings")
+        contour_smoothing = st.slider("Smoothing level", 0.0, 3.0, 1.0, 0.1)
+        show_contour_lines = st.checkbox("Show contour lines", value=True)
+        show_contour_labels = st.checkbox("Show contour labels", value=True)
+    
+    # Advanced features
+    st.header("🔬 Advanced Features")
+    
+    # GGside-like features
+    st.subheader("📊 Marginal Plots (ggside)")
+    show_marginal = st.checkbox("Show marginal statistics", value=False)
+    if show_marginal:
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            show_row_stats = st.checkbox("Row stats", value=True)
+        with col_m2:
+            show_col_stats = st.checkbox("Column stats", value=True)
+        cluster_marginal = st.checkbox("Cluster marginal data", value=False)
+        if cluster_marginal:
+            n_clusters_m = st.slider("Clusters", 2, 10, 3, key='marginal')
+    
+    # Statistical analysis
+    st.subheader("📊 Statistical Analysis")
+    show_statistical = st.checkbox("Show statistical heatmap", value=False)
+    if show_statistical:
+        stat_method = st.selectbox(
+            "Method",
+            ["zscore", "percentile", "pvalue"],
+            key='stat'
+        )
+    
+    # Clustering
+    st.subheader("🗂️ Clustering")
+    show_clustered = st.checkbox("Show clustered heatmap", value=False)
+    if show_clustered:
+        n_clusters = st.slider("Number of clusters", 2, 10, 3, key='cluster')
+        cluster_method = st.selectbox(
+            "Clustering method",
+            ["kmeans", "hierarchical"]
+        )
+    
+    # Correlation
+    st.subheader("📈 Correlation Analysis")
+    show_correlation = st.checkbox("Show correlation matrix", value=False)
+    
+    # Time series
+    st.subheader("⏰ Time Series")
+    show_time_series = st.checkbox("Show time series analysis", value=False)
+    
+    # Export settings
+    st.header("💾 Export Settings")
+    save_dpi = st.slider("DPI for export", 100, 600, 300)
+    
+    # Reset button
+    if st.button("🔄 Reset All Settings"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+# Main content area
+col_left, col_right = st.columns([1, 1])
+
+with col_left:
+    st.header("📥 Data Input")
+    
+    example_choice = st.selectbox(
+        "Choose example data or upload your own",
+        ["Upload your own data", 
+         "Example 1: Simple Matrix",
+         "Example 2: Gene Expression", 
+         "Example 3: Time Series Data",
+         "Example 4: Clinical Measurements"]
+    )
+    
+    if example_choice == "Example 1: Simple Matrix":
+        example_data = """A,Jan,10
 A,Feb,20
 B,Jan,15
-B,Feb,25"""
-    elif example_choice == "Example 2: Temperature data":
-        example_data = """X,Y,Value
-Method1,25,0.1
-Method1,50,0.2
-Method1,100,0.3
-Method1,150,0.4
-Method1,200,0.5
-Method1,250,0.6
-Method1,300,0.7
-Method1,350,0.8
-Method1,400,0.9
-Method1,450,1.0
-Method1,500,1.1
-Method1,550,1.2
-Method1,600,1.3
-Method1,650,1.4
-Method1,700,1.5
-Method1,750,1.6
-Method1,800,1.7
-Method1,850,1.8
-Method1,900,1.9
-Method1,950,2.0
-Method1,1000,2.1
-Method2,25,0.15
-Method2,50,0.25
-Method2,100,0.35
-Method2,150,0.45
-Method2,200,0.55
-Method2,250,0.65
-Method2,300,0.75
-Method2,350,0.85
-Method2,400,0.95
-Method2,450,1.05
-Method2,500,1.15
-Method2,550,1.25
-Method2,600,1.35
-Method2,650,1.45
-Method2,700,1.55
-Method2,750,1.65
-Method2,800,1.75
-Method2,850,1.85
-Method2,900,1.95
-Method2,950,2.05
-Method2,1000,2.15"""
-    elif example_choice == "Example 3: With gaps":
-        example_data = """A\t1\t0.2
-\t2\t0.3
-\t3\t0.4
-B\t1\t0.25
-\t2\t0.35
-\t3\t0.45"""
-    elif example_choice == "Example 4: Negative values":
-        example_data = """X,Y,Value
-A,Jan,-10
-A,Feb,20
-B,Jan,15
-B,Feb,-5
+B,Feb,25
 C,Jan,30
-C,Feb,-15"""
+C,Feb,35"""
+    elif example_choice == "Example 2: Gene Expression":
+        example_data = """Gene,T0,T1,T2,T3,T4
+GeneA,1.2,2.3,3.1,2.8,1.9
+GeneB,0.8,1.5,2.2,2.1,1.3
+GeneC,2.1,3.8,4.5,4.2,3.1
+GeneD,1.5,2.8,3.9,3.5,2.4
+GeneE,0.9,1.8,2.7,2.4,1.5"""
+    elif example_choice == "Example 3: Time Series Data":
+        example_data = """Time,Sample1,Sample2,Sample3,Sample4,Sample5
+0h,10.2,12.5,9.8,11.3,10.7
+1h,15.3,18.2,14.7,16.8,15.9
+2h,22.1,25.4,21.3,23.7,22.5
+3h,18.7,21.3,17.9,19.8,18.9
+4h,12.8,15.1,11.9,13.7,12.9
+5h,8.5,10.2,7.9,9.3,8.7"""
+    elif example_choice == "Example 4: Clinical Measurements":
+        example_data = """Patient,BP_Systolic,BP_Diastolic,Heart_Rate,Temperature,Glucose
+P001,120,80,72,36.6,5.2
+P002,135,85,68,36.8,6.1
+P003,118,78,75,36.5,5.8
+P004,142,92,80,37.1,7.2
+P005,128,84,70,36.7,5.5
+P006,130,82,73,36.9,6.3"""
     else:
         example_data = ""
     
-    # Data input field
     data_input = st.text_area(
-        "Enter data (X, Y, Value separated by comma, tab or space):",
+        "Enter your data (CSV, TSV, or space-separated):",
         value=example_data,
-        height=200
+        height=250,
+        help="Format: X,Y,Value or with headers. Each row should contain X, Y, and Value."
     )
     
-    # File upload
     uploaded_file = st.file_uploader(
-        "Or upload a file",
-        type=['txt', 'csv', 'tsv', 'dat']
+        "📁 Or upload a data file",
+        type=['txt', 'csv', 'tsv', 'xlsx', 'xls'],
+        help="Supported formats: CSV, TSV, Excel, Text"
     )
     
     if uploaded_file is not None:
-        content = uploaded_file.read().decode('utf-8')
-        data_input = content
-    
-    # Process button
-    if st.button("Generate Heatmaps", type="primary"):
-        if data_input.strip():
-            with st.spinner("Processing data..."):
-                df = parse_data(data_input)
-                
-                if df is not None and not df.empty:
-                    st.session_state.df = df
-                    st.session_state.data_ready = True
-                    st.session_state.show_values = show_values
-                    st.session_state.sort_numerically = sort_numerically
-                    
-                    # Store original data for download
-                    st.session_state.original_data = data_input
-                else:
-                    st.error("Failed to process data. Please check the format.")
-        else:
-            st.warning("Please enter data or upload a file.")
-
-with col2:
-    st.header("Data Preview")
-    
-    if 'df' in st.session_state and st.session_state.get('data_ready', False):
-        df = st.session_state.df
-        
-        st.subheader("Processed Data")
-        st.dataframe(df[['X', 'Y', 'Value']], use_container_width=True)
-        
-        st.subheader("Data Statistics")
-        col_stats1, col_stats2 = st.columns(2)
-        with col_stats1:
-            st.metric("Number of rows", len(df))
-            st.metric("Unique X values", df['X'].nunique())
-        with col_stats2:
-            st.metric("Unique Y values", df['Y'].nunique())
-            
-            # Safely calculate value range
-            try:
-                value_min = df['Value'].min()
-                value_max = df['Value'].max()
-                if pd.isna(value_min) or pd.isna(value_max):
-                    st.metric("Value range", "N/A (contains NaN)")
-                else:
-                    st.metric("Value range", f"{value_min:.2f} - {value_max:.2f}")
-            except:
-                st.metric("Value range", "N/A")
-        
-        st.subheader("Pivot Table")
-        pivot_df = create_pivot_table(df, sort_numerically)
-        if pivot_df is not None:
-            st.dataframe(pivot_df, use_container_width=True)
-            
-            # Show order information
-            if len(pivot_df.columns) > 0:
-                st.info(f"X-axis order: {', '.join(pivot_df.columns.tolist()[:5])}{'...' if len(pivot_df.columns) > 5 else ''}")
-            if len(pivot_df.index) > 0:
-                st.info(f"Y-axis order: {', '.join(pivot_df.index.tolist()[:5])}{'...' if len(pivot_df.index) > 5 else ''}")
-
-# Plots area
-if 'df' in st.session_state and st.session_state.get('data_ready', False):
-    st.markdown("---")
-    st.header("Heatmaps")
-    
-    df = st.session_state.df
-    pivot_df = create_pivot_table(df, sort_numerically)
-    
-    if pivot_df is not None:
-        # Value format configuration
-        if value_format == "Integer":
-            text_format = ".0f"
-        elif value_format == "Two decimals":
-            text_format = ".2f"
-        elif value_format == "Three decimals":
-            text_format = ".3f"
-        elif value_format == "Scientific":
-            text_format = ".2e"
-        else:
-            # Automatic format selection
-            if df['Value'].dtype == np.int64:
-                text_format = ".0f"
+        try:
+            if uploaded_file.name.endswith(('.xlsx', '.xls')):
+                df_uploaded = pd.read_excel(uploaded_file)
+                data_input = df_uploaded.to_csv(index=False)
             else:
-                text_format = ".2f"
-        
-        # Create color scale
-        if use_custom_palette and custom_colors:
-            # Custom color scale
-            colorscale = [[i/(len(custom_colors)-1), color] for i, color in enumerate(custom_colors)]
-        else:
-            # Use built-in palette
-            colorscale = selected_palette
-        
-        # 1. MAIN HEATMAP
-        st.subheader("1. Main Heatmap")
-        
-        # Prepare data for plotting
-        plot_data = pivot_df.values.copy()
-        
-        # Create text for cells
-        if show_values:
-            text_matrix = np.empty_like(plot_data, dtype=object)
-            for i in range(text_matrix.shape[0]):
-                for j in range(text_matrix.shape[1]):
-                    value = plot_data[i, j]
-                    if np.isnan(value):
-                        text_matrix[i, j] = ""
+                content = uploaded_file.read().decode('utf-8')
+                data_input = content
+            st.success("✅ File uploaded successfully!")
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
+    
+    generate_button = st.button(
+        "🚀 Generate All Selected Plots", 
+        type="primary", 
+        use_container_width=True,
+        help="Generate all selected visualizations based on current settings"
+    )
+
+with col_right:
+    st.header("📋 Data Preview")
+    
+    if generate_button and data_input.strip():
+        with st.spinner("🔄 Processing data and generating plots..."):
+            # Parse data
+            df = parse_data(data_input)
+            
+            if df is not None and not df.empty:
+                st.session_state.df = df
+                st.session_state.data_ready = True
+                
+                # Create pivot table
+                pivot_df = create_pivot_table(df, sort_numerically)
+                
+                if pivot_df is not None:
+                    st.session_state.pivot_df = pivot_df
+                    
+                    # Apply normalization
+                    normalized_df = None
+                    if normalization_method != "None":
+                        normalized_df = normalize_data(pivot_df, normalization_method)
                     else:
-                        if text_format == ".0f":
-                            text_matrix[i, j] = f"{value:.0f}"
-                        elif text_format == ".2f":
-                            text_matrix[i, j] = f"{value:.2f}"
-                        elif text_format == ".3f":
-                            text_matrix[i, j] = f"{value:.3f}"
-                        elif text_format == ".2e":
-                            text_matrix[i, j] = f"{value:.2e}"
-                        else:
-                            text_matrix[i, j] = f"{value:.2f}"
-        else:
-            text_matrix = None
-        
-        fig1 = go.Figure(data=go.Heatmap(
-            z=plot_data,
-            x=pivot_df.columns.tolist(),
-            y=pivot_df.index.tolist(),
-            colorscale=colorscale,
-            text=text_matrix,
-            texttemplate='%{text}' if text_matrix is not None else None,
-            hoverongaps=False,
-            hoverinfo='x+y+z',
-            colorbar=dict(
-                title=dict(
-                    text=colorbar_title,
-                    font=dict(color='black', size=colorbar_font_size)
-                ),
-                tickfont=dict(color='black', size=colorbar_font_size-2),
-                orientation='v',
-                x=1.02,
-                xpad=20
-            ),
-            xgap=1,
-            ygap=1
-        ))
-        
-        # Layout configuration for main plot
-        fig1.update_layout(
-            title=dict(
-                text="Heatmap (with borders)",
-                font=dict(size=16, color='black'),
-                x=0.5
-            ),
-            xaxis=dict(
-                title=dict(
-                    text=x_label,
-                    font=dict(color='black', size=axis_font_size)
-                ),
-                tickfont=dict(color='black', size=tick_font_size),
-                gridcolor='black',
-                linecolor='black',
-                mirror=True,
-                showline=True,
-                zeroline=False,
-                showgrid=False,
-                type='category',
-                tickmode='array',
-                tickvals=list(range(len(pivot_df.columns))),
-                ticktext=pivot_df.columns.tolist()
-            ),
-            yaxis=dict(
-                title=dict(
-                    text=y_label,
-                    font=dict(color='black', size=axis_font_size)
-                ),
-                tickfont=dict(color='black', size=tick_font_size),
-                gridcolor='black',
-                linecolor='black',
-                mirror=True,
-                showline=True,
-                zeroline=False,
-                showgrid=False,
-                type='category',
-                tickmode='array',
-                tickvals=list(range(len(pivot_df.index))),
-                ticktext=pivot_df.index.tolist()
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            width=800,
-            height=500,
-            margin=dict(l=50, r=100, t=50, b=50)  # Increased right margin for colorbar
-        )
-        
-        st.plotly_chart(fig1, use_container_width=True)
-        
-        # 2. NORMALIZED HEATMAP (only if all values are non-negative)
-        normalized_df = None
-        if show_normalized:
-            st.subheader("2. Normalized Heatmap (0-1)")
-            
-            normalized_df = normalize_data(pivot_df)
-            
-            if normalized_df is not None:
-                # Create text for cells
-                if show_values:
-                    norm_text_matrix = np.empty_like(normalized_df.values, dtype=object)
-                    for i in range(norm_text_matrix.shape[0]):
-                        for j in range(norm_text_matrix.shape[1]):
-                            value = normalized_df.values[i, j]
-                            if np.isnan(value):
-                                norm_text_matrix[i, j] = ""
-                            else:
-                                norm_text_matrix[i, j] = f"{value:.3f}"
-                else:
-                    norm_text_matrix = None
-                
-                fig2 = go.Figure(data=go.Heatmap(
-                    z=normalized_df.values,
-                    x=normalized_df.columns.tolist(),
-                    y=normalized_df.index.tolist(),
-                    colorscale=colorscale,
-                    text=norm_text_matrix,
-                    texttemplate='%{text}' if norm_text_matrix is not None else None,
-                    hoverongaps=False,
-                    hoverinfo='x+y+z',
-                    colorbar=dict(
-                        title=dict(
-                            text=f"{colorbar_title} (normalized)",
-                            font=dict(color='black', size=colorbar_font_size)
-                        ),
-                        tickfont=dict(color='black', size=colorbar_font_size-2),
-                        orientation='v',
-                        x=1.02,
-                        xpad=20
-                    ),
-                    xgap=1,
-                    ygap=1
-                ))
-                
-                fig2.update_layout(
-                    title=dict(
-                        text="Normalized Heatmap",
-                        font=dict(size=16, color='black'),
-                        x=0.5
-                    ),
-                    xaxis=dict(
-                        title=dict(
-                            text=x_label,
-                            font=dict(color='black', size=axis_font_size)
-                        ),
-                        tickfont=dict(color='black', size=tick_font_size),
-                        gridcolor='black',
-                        linecolor='black',
-                        mirror=True,
-                        showline=True,
-                        zeroline=False,
-                        showgrid=False,
-                        type='category',
-                        tickmode='array',
-                        tickvals=list(range(len(normalized_df.columns))),
-                        ticktext=normalized_df.columns.tolist()
-                    ),
-                    yaxis=dict(
-                        title=dict(
-                            text=y_label,
-                            font=dict(color='black', size=axis_font_size)
-                        ),
-                        tickfont=dict(color='black', size=tick_font_size),
-                        gridcolor='black',
-                        linecolor='black',
-                        mirror=True,
-                        showline=True,
-                        zeroline=False,
-                        showgrid=False,
-                        type='category',
-                        tickmode='array',
-                        tickvals=list(range(len(normalized_df.index))),
-                        ticktext=normalized_df.index.tolist()
-                    ),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    width=800,
-                    height=500,
-                    margin=dict(l=50, r=100, t=50, b=50)
-                )
-                
-                st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.info("Normalization not required or impossible (all values are equal)")
-        
-        # 3. CONTOUR MAP (smooth transition)
-        if show_contour:
-            st.subheader("3. Contour Map")
-            
-            fig3 = create_smooth_contour(pivot_df, selected_palette, contour_smoothing, 
-                                        show_contour_lines, show_contour_labels)
-            if fig3:
-                # Update axis labels
-                fig3.update_xaxes(
-                    title=dict(
-                        text=x_label,
-                        font=dict(color='black', size=axis_font_size)
-                    )
-                )
-                fig3.update_yaxes(
-                    title=dict(
-                        text=y_label,
-                        font=dict(color='black', size=axis_font_size)
-                    )
-                )
-                
-                # Update colorbar title
-                fig3.update_traces(
-                    colorbar=dict(
-                        title=dict(
-                            text=colorbar_title,
-                            font=dict(color='black', size=colorbar_font_size)
-                        ),
-                        tickfont=dict(color='black', size=colorbar_font_size-2),
-                        orientation='v',
-                        x=1.02,
-                        xpad=20
-                    )
-                )
-                
-                # Update layout margins for colorbar
-                fig3.update_layout(
-                    margin=dict(l=50, r=100, t=50, b=50)
-                )
-                
-                st.plotly_chart(fig3, use_container_width=True)
-        
-        # 4. ADDITIONAL PLOTS
-        additional_plots_data = []
-        if show_additional:
-            st.subheader("4. Additional Visualizations")
-            
-            additional_plots_data = create_additional_plots(pivot_df, selected_palette, x_label, y_label, colorbar_title)
-            
-            if additional_plots_data:
-                # Display plots in columns
-                cols = st.columns(2)
-                for idx, (plot_name, plot_fig) in enumerate(additional_plots_data):
-                    with cols[idx % 2]:
-                        # Update font colors for additional plots
-                        plot_fig.update_layout(
-                            title_font=dict(color='black'),
-                            plot_bgcolor='white',
-                            paper_bgcolor='white'
-                        )
-                        
-                        # Update colorbar orientation and position
-                        plot_fig.update_traces(
-                            colorbar=dict(
-                                orientation='v',
-                                x=1.02,
-                                xpad=20
-                            )
-                        )
-                        
-                        # Update margins for colorbar
-                        plot_fig.update_layout(
-                            margin=dict(l=50, r=100, t=50, b=50)
-                        )
-                        
-                        # Ensure axes have black labels
-                        if 'scene' in plot_fig.layout:
-                            # For 3D plots
-                            plot_fig.update_scenes(
-                                xaxis_title_font=dict(color='black'),
-                                yaxis_title_font=dict(color='black'),
-                                zaxis_title_font=dict(color='black'),
-                                xaxis_tickfont=dict(color='black'),
-                                yaxis_tickfont=dict(color='black'),
-                                zaxis_tickfont=dict(color='black')
-                            )
-                        else:
-                            # For 2D plots
-                            plot_fig.update_xaxes(
-                                title_font=dict(color='black'),
-                                tickfont=dict(color='black')
-                            )
-                            plot_fig.update_yaxes(
-                                title_font=dict(color='black'),
-                                tickfont=dict(color='black')
-                            )
-                        
-                        st.plotly_chart(plot_fig, use_container_width=True)
-        
-        # Export options
-        st.markdown("---")
-        st.subheader("Export Options")
-        
-        col_export1, col_export2, col_export3 = st.columns(3)
-        
-        with col_export1:
-            if st.button("📦 Save All Plots (ZIP)"):
-                try:
-                    with st.spinner("Creating ZIP archive with high-resolution images..."):
-                        # Create normalized_df if not already created
-                        if normalized_df is None and show_normalized:
-                            normalized_df = normalize_data(pivot_df)
-                        
-                        # Save all plots using matplotlib
-                        zip_buffer = save_all_plots_matplotlib(
-                            pivot_df, normalized_df, x_label, y_label, colorbar_title,
-                            additional_plots_data, dpi=save_dpi, show_values=show_values
-                        )
-                        
-                        # Create download button for ZIP
-                        st.download_button(
-                            label=f"Download ZIP ({save_dpi} DPI)",
-                            data=zip_buffer.getvalue(),
-                            file_name=f"heatmap_plots_{save_dpi}dpi.zip",
-                            mime="application/zip"
-                        )
-                        
-                        st.success(f"✅ All plots saved with {save_dpi} DPI resolution!")
-                        
-                except Exception as e:
-                    st.error(f"Error saving plots: {str(e)}")
+                        normalized_df = pivot_df
                     
-        with col_export2:
-            # Export data
-            if 'original_data' in st.session_state:
-                st.download_button(
-                    label="Download Data (CSV)",
-                    data=st.session_state.original_data,
-                    file_name="heatmap_data.csv",
-                    mime="text/csv"
-                )
-            
-        with col_export3:
-            # Export pivot table
-            pivot_csv = pivot_df.to_csv()
-            st.download_button(
-                label="Download Pivot Table",
-                data=pivot_csv,
-                file_name="pivot_table.csv",
-                mime="text/csv"
-            )
+                    st.session_state.normalized_df = normalized_df
+                    
+                    # Generate all requested plots
+                    all_plots = {}
+                    additional_plots_list = []
+                    
+                    # 1. Basic Heatmap
+                    fig_basic = create_basic_heatmap(
+                        normalized_df, selected_palette, x_label, y_label,
+                        colorbar_title, show_values, value_format
+                    )
+                    if fig_basic:
+                        all_plots["Basic Heatmap"] = fig_basic
+                    
+                    # 2. Normalized Heatmap
+                    if show_normalized and normalization_method != "None":
+                        fig_norm = create_normalized_heatmap(
+                            normalized_df, selected_palette, x_label, y_label,
+                            f"{colorbar_title} ({normalization_method})", normalization_method
+                        )
+                        if fig_norm:
+                            all_plots["Normalized Heatmap"] = fig_norm
+                    
+                    # 3. Contour Map
+                    if show_contour:
+                        fig_contour = create_smooth_contour(
+                            normalized_df, selected_palette, contour_smoothing,
+                            show_contour_lines, show_contour_labels
+                        )
+                        if fig_contour:
+                            all_plots["Contour Map"] = fig_contour
+                    
+                    # 4. Additional plots from original code
+                    if show_additional:
+                        original_additional = create_additional_plots(
+                            normalized_df, selected_palette, x_label, y_label, colorbar_title
+                        )
+                        for plot_name, plot_fig in original_additional:
+                            if plot_fig:
+                                all_plots[plot_name] = plot_fig
+                                additional_plots_list.append((plot_name, plot_fig))
+                    
+                    # 5. Marginal Heatmap (ggside-like)
+                    if show_marginal:
+                        fig_marginal = create_marginal_heatmap(
+                            normalized_df, selected_palette, x_label, y_label,
+                            colorbar_title, show_row_stats, show_col_stats,
+                            False, cluster_marginal if 'cluster_marginal' in locals() else False,
+                            n_clusters_m if 'n_clusters_m' in locals() else 3
+                        )
+                        if fig_marginal:
+                            all_plots["Marginal Heatmap"] = fig_marginal
+                    
+                    # 6. Statistical Heatmap
+                    if show_statistical:
+                        fig_stat = create_statistical_heatmap(
+                            normalized_df, selected_palette, stat_method
+                        )
+                        if fig_stat:
+                            all_plots["Statistical Heatmap"] = fig_stat
+                    
+                    # 7. Clustered Heatmap
+                    if show_clustered:
+                        fig_clust = create_clustered_heatmap(
+                            normalized_df, selected_palette, n_clusters
+                        )
+                        if fig_clust:
+                            all_plots["Clustered Heatmap"] = fig_clust
+                    
+                    # 8. Correlation Matrix
+                    if show_correlation:
+                        fig_corr = create_correlation_heatmap(pivot_df, 'RdBu')
+                        if fig_corr:
+                            all_plots["Correlation Matrix"] = fig_corr
+                    
+                    # 9. Time Series Analysis
+                    if show_time_series:
+                        fig_time = create_time_series_heatmap(normalized_df, selected_palette)
+                        if fig_time:
+                            all_plots["Time Series Analysis"] = fig_time
+                    
+                    st.session_state.all_plots = all_plots
+                    st.session_state.additional_plots = additional_plots_list
+                    
+                    st.success("✅ All plots generated successfully!")
+                    
+                    # Display data statistics
+                    st.subheader("📊 Data Statistics")
+                    stats_data = calculate_statistics(pivot_df)
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Rows", len(pivot_df))
+                        st.metric("Row Mean", f"{stats_data['row_means'].mean():.3f}")
+                    
+                    with col2:
+                        st.metric("Columns", len(pivot_df.columns))
+                        st.metric("Column Mean", f"{stats_data['col_means'].mean():.3f}")
+                    
+                    with col3:
+                        st.metric("Global Mean", f"{stats_data['global_mean']:.3f}")
+                        st.metric("Global Std", f"{stats_data['global_std']:.3f}")
+                    
+                    with col4:
+                        st.metric("Min Value", f"{stats_data['global_min']:.3f}")
+                        st.metric("Max Value", f"{stats_data['global_max']:.3f}")
+                    
+                    # Display data preview
+                    with st.expander("📄 View Full Data Table"):
+                        st.dataframe(pivot_df, use_container_width=True)
+                    
+            else:
+                st.error("❌ Failed to process data. Please check the format.")
 
-# Data format information
-with st.expander("📋 Data Format Information"):
+# Display generated plots
+if 'all_plots' in st.session_state and st.session_state.all_plots:
+    st.markdown("---")
+    st.header("📊 Generated Visualizations")
+    
+    # Create tabs for different plot categories
+    tabs = st.tabs(["Basic Plots", "Advanced Analysis", "3D & Special", "Export"])
+    
+    with tabs[0]:
+        st.subheader("Basic Heatmaps")
+        
+        if "Basic Heatmap" in st.session_state.all_plots:
+            st.plotly_chart(st.session_state.all_plots["Basic Heatmap"], 
+                          use_container_width=True)
+        
+        if "Normalized Heatmap" in st.session_state.all_plots:
+            st.plotly_chart(st.session_state.all_plots["Normalized Heatmap"], 
+                          use_container_width=True)
+        
+        if "Contour Map" in st.session_state.all_plots:
+            st.plotly_chart(st.session_state.all_plots["Contour Map"], 
+                          use_container_width=True)
+    
+    with tabs[1]:
+        st.subheader("Advanced Statistical Analysis")
+        
+        cols = st.columns(2)
+        plot_idx = 0
+        
+        for plot_name, plot_fig in st.session_state.all_plots.items():
+            if plot_name in ["Marginal Heatmap", "Statistical Heatmap", 
+                           "Clustered Heatmap", "Correlation Matrix", 
+                           "Time Series Analysis"]:
+                with cols[plot_idx % 2]:
+                    st.plotly_chart(plot_fig, use_container_width=True)
+                plot_idx += 1
+    
+    with tabs[2]:
+        st.subheader("3D and Special Visualizations")
+        
+        for plot_name, plot_fig in st.session_state.all_plots.items():
+            if plot_name in ["3D Surface Plot", "3D Wireframe Plot", 
+                           "Density Heatmap", "Gradient Field"]:
+                st.plotly_chart(plot_fig, use_container_width=True)
+    
+    with tabs[3]:
+        st.subheader("📦 Export All Plots")
+        
+        col_exp1, col_exp2, col_exp3 = st.columns(3)
+        
+        with col_exp1:
+            if st.button("💾 Download All Plots (ZIP)", use_container_width=True):
+                try:
+                    with st.spinner("Creating high-resolution ZIP archive..."):
+                        zip_buffer = save_all_plots_matplotlib(
+                            st.session_state.pivot_df,
+                            st.session_state.normalized_df,
+                            x_label, y_label, colorbar_title,
+                            st.session_state.additional_plots,
+                            save_dpi, show_values
+                        )
+                        
+                        st.download_button(
+                            label=f"⬇️ Download ZIP ({save_dpi} DPI)",
+                            data=zip_buffer.getvalue(),
+                            file_name=f"scientific_heatmaps_{save_dpi}dpi.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+                except Exception as e:
+                    st.error(f"Export error: {str(e)}")
+        
+        with col_exp2:
+            if 'df' in st.session_state:
+                csv_data = st.session_state.df.to_csv(index=False)
+                st.download_button(
+                    label="📄 Export Raw Data",
+                    data=csv_data,
+                    file_name="heatmap_data.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        
+        with col_exp3:
+            if 'pivot_df' in st.session_state:
+                pivot_csv = st.session_state.pivot_df.to_csv()
+                st.download_button(
+                    label="📊 Export Pivot Table",
+                    data=pivot_csv,
+                    file_name="pivot_table.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        
+        # Plot summary
+        st.subheader("Generated Plots Summary")
+        plot_list = list(st.session_state.all_plots.keys())
+        
+        cols_summary = st.columns(3)
+        for i, plot_name in enumerate(plot_list):
+            with cols_summary[i % 3]:
+                st.info(f"**{i+1}. {plot_name}**")
+
+# Documentation
+with st.expander("📚 User Guide & Documentation"):
     st.markdown("""
-    ### Supported Data Formats:
+    ## 🎯 How to Use This Tool
     
-    1. **CSV format**: X,Y,Value separated by comma
-    ```
-    Temperature,Pressure,Value
-    25,1,0.1
-    50,1,0.2
-    100,1,0.3
-    150,1,0.4
-    ```
+    ### 1. Data Input
+    - **Format**: CSV, TSV, or space-separated values
+    - **Structure**: Each row should contain X, Y, and Value
+    - **Headers**: Optional, can be included in first row
     
-    2. **TSV format**: X,Y,Value separated by tab
-    ```
-    Temperature	Pressure	Value
-    25	1	0.1
-    50	1	0.2
-    100	1	0.3
-    150	1	0.4
-    ```
+    ### 2. Core Features
     
-    3. **Space separated**: X Y Value separated by space
-    ```
-    Temperature Pressure Value
-    25 1 0.1
-    50 1 0.2
-    100 1 0.3
-    150 1 0.4
-    ```
+    #### Basic Plots:
+    - **Heatmap**: Standard heatmap visualization
+    - **Normalized Heatmap**: Data normalized using selected method
+    - **Contour Map**: Smooth contour visualization
+    - **3D Plots**: Surface and wireframe 3D visualizations
     
-    ### Key Features:
+    #### Advanced Features (Optional):
+    - **Marginal Plots**: Statistics on heatmap margins (ggside-like)
+    - **Statistical Heatmaps**: Z-scores, p-values, significance markers
+    - **Clustering**: K-means and hierarchical clustering
+    - **Correlation Analysis**: Correlation matrix heatmap
+    - **Time Series**: Temporal pattern analysis
     
-    - **Handles mixed data types**: Supports word-word-number, word-number-number, number-word-number, number-number-number
-    - **Preserves axis order**: Values are displayed in the order they appear in your data
-    - **Numeric sorting option**: Optional automatic numeric sorting of axis values
-    - **High-resolution export**: Save all plots as PNG images with configurable DPI (100-600)
-    - **Multiple plot types**: Heatmaps, normalized plots, contour maps, and additional visualizations
-    - **Customizable contour smoothing**: Adjust from sharp boundaries to smooth transitions
-    - **Proper colorbar placement**: Colorbar titles are now vertical and properly positioned
+    ### 3. Customization Options
+    
+    #### Color Settings:
+    - 15 built-in color palettes
+    - Optimized for scientific publications
+    - Colorblind-friendly options available
+    
+    #### Display Options:
+    - Show/hide cell values
+    - Format values (integer, decimal, scientific)
+    - Adjust font sizes and labels
+    - Custom axis labels
+    
+    ### 4. Export Options
+    
+    #### High-Resolution Export:
+    - All plots as PNG images (100-600 DPI)
+    - Publication-ready formatting
+    - Black axis labels (meets journal requirements)
+    - Organized ZIP file with numbered files
+    
+    #### Data Export:
+    - Raw data as CSV
+    - Pivot table as CSV
+    - Statistical summary
+    
+    ### 5. Scientific Applications
+    
+    #### Bioinformatics:
+    - Gene expression heatmaps
+    - Clustering of genes/samples
+    - Statistical significance
+    
+    #### Clinical Research:
+    - Patient data visualization
+    - Treatment response patterns
+    - Correlation analysis
+    
+    #### Time Series Analysis:
+    - Temporal pattern visualization
+    - Trend analysis
+    - Comparative studies
+    
+    ### 6. Tips for Publication
+    
+    1. **Choose appropriate color palette**: Use sequential palettes for continuous data
+    2. **Enable value display**: For precise data presentation
+    3. **Use normalization**: When comparing datasets with different scales
+    4. **Add statistical annotations**: For hypothesis testing results
+    5. **Export at 300+ DPI**: For print publications
+    
+    ### 7. Troubleshooting
+    
+    - **Data format errors**: Ensure consistent delimiter usage
+    - **Missing values**: Tool handles NaN values automatically
+    - **Large datasets**: Consider subset for initial visualization
+    - **Memory issues**: Reduce number of simultaneous plots
+    
+    ### 8. Citation & Attribution
+    
+    When using this tool for publications, please cite:
+    > Advanced Scientific Heatmap Generator v2.0
+    > [Your Institution/Name], [Year]
+    
+    ---
+    
+    **Need help?** Check the examples or contact support.
     """)
 
 # Footer
 st.markdown("---")
-st.markdown("""
-**Heatmap Generator for Scientific Publications** | Optimized for research papers
-""")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666; padding: 20px;'>
+    <b>🔥 Advanced Scientific Heatmap Generator v2.0</b><br>
+    <small>Designed for scientific publications • All features optional • High-resolution export</small><br>
+    <small>Supports: 📊 Basic Heatmaps • 🔬 Statistical Analysis • 🗂️ Clustering • 📈 Time Series • 💾 Publication Export</small>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
