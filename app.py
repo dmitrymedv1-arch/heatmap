@@ -680,13 +680,19 @@ class ScientificHeatmapApp:
             "Data Input Method",
             ["📝 Text Input", "📁 File Upload", "🧪 Sample Data"]
         )
-        
+
         if data_input_method == "📝 Text Input":
-            self.setup_text_input()
+            if self.setup_text_input():
+                st.session_state.data_loaded = True
+                st.rerun()
         elif data_input_method == "📁 File Upload":
-            self.setup_file_upload()
+            if self.setup_file_upload():
+                st.session_state.data_loaded = True
+                st.rerun()
         else:
-            self.load_sample_data()
+            if self.load_sample_data():
+                st.session_state.data_loaded = True
+                st.rerun()
         
         if st.session_state.data_loaded:
             st.sidebar.markdown("---")
@@ -717,7 +723,7 @@ class ScientificHeatmapApp:
             
             if st.sidebar.button("🔄 Reset", type="secondary", use_container_width=True):
                 self.reset_analysis()
-    
+                
     def setup_text_input(self):
         """Setup text input widget"""
         st.sidebar.subheader("📝 Enter Data")
@@ -743,9 +749,9 @@ class ScientificHeatmapApp:
             if data_input.strip():
                 delimiter = delimiter_map[data_format]
                 if self.parse_data_text(data_input, delimiter):
-                    st.session_state.data_loaded = True
-                    st.rerun()
-    
+                    return True
+        return False
+
     def setup_file_upload(self):
         """Setup file upload widget"""
         st.sidebar.subheader("📁 Upload Data")
@@ -753,7 +759,7 @@ class ScientificHeatmapApp:
         uploaded_file = st.sidebar.file_uploader(
             "Choose a file",
             type=['csv', 'txt', 'xlsx', 'xls', 'tsv'],
-            help="Upload CSV, TSV, Excel, or text file"
+            help="Upload CSV, TSV, Excel, или text file"
         )
         
         if uploaded_file is not None:
@@ -768,17 +774,18 @@ class ScientificHeatmapApp:
                     delimiter = self.detect_delimiter(content)
                 
                 if self.parse_data_text(content, delimiter):
-                    st.session_state.data_loaded = True
-                    st.rerun()
-    
+                    return True
+        return False
+        
     def load_sample_data(self):
         """Load sample data"""
         st.sidebar.subheader("🧪 Sample Data")
         
         if st.sidebar.button("Load 5x5 Test Data", use_container_width=True):
             self.load_test_data()
-            st.session_state.data_loaded = True
-            st.rerun()
+            # Это не обновит state в текущей функции
+            return True
+        return False
     
     def setup_preprocessing_widgets(self):
         """Setup preprocessing widgets"""
@@ -980,8 +987,6 @@ class ScientificHeatmapApp:
         # Parse as if from text
         csv_content = df.to_csv(index=False)
         self.parse_data_text(csv_content, ',')
-        
-        st.success("✅ Sample data loaded!")
     
     def perform_analysis(self):
         """Perform comprehensive analysis"""
@@ -1601,5 +1606,6 @@ if __name__ == "__main__":
     app = ScientificHeatmapApp()
 
     app.run()
+
 
 
