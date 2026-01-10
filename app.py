@@ -901,12 +901,8 @@ with col2:
             st.metric("Unique X values", df['X'].nunique())
         with col_stats2:
             st.metric("Unique Y values", df['Y'].nunique())
-            try:
-                min_val = float(df['Value'].min())
-                max_val = float(df['Value'].max())
-                st.metric("Value range", f"{min_val:.2f} - {max_val:.2f}")
-            except (ValueError, TypeError):
-                st.metric("Value range", f"{df['Value'].min()} - {df['Value'].max()}")
+            st.metric("Value range", 
+                     f"{df['Value'].min():.2f} - {df['Value'].max():.2f}")
         
         st.subheader("Pivot Table")
         pivot_df = create_pivot_table(df)
@@ -1315,7 +1311,3 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
-
-
-
-
