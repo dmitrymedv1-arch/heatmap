@@ -89,9 +89,13 @@ def parse_data(content: str) -> pd.DataFrame:
         st.error(f"Error reading data: {e}")
         return None
     
-    # Convert to string for categorical data
+    # Keep original types but ensure they are strings for categorical representation
     df['X'] = df['X'].astype(str)
     df['Y'] = df['Y'].astype(str)
+    
+    # Store original values as separate columns for numeric sorting
+    df['X_numeric'] = pd.to_numeric(df['X'], errors='coerce')
+    df['Y_numeric'] = pd.to_numeric(df['Y'], errors='coerce')
     
     # Try to convert Value to numeric format
     try:
@@ -103,17 +107,31 @@ def parse_data(content: str) -> pd.DataFrame:
 
 def create_pivot_table(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create pivot table for heatmap
+    Create pivot table for heatmap - preserve original order
     """
     if df is None or df.empty:
         return None
     
-    # Create pivot table
+    # Get unique X and Y values in the order they appear
+    x_order = df['X'].unique().tolist()
+    y_order = df['Y'].unique().tolist()
+    
+    # Try to sort numerically if possible
+    if df['X_numeric'].notna().all():
+        # Sort X values numerically
+        x_sorted = df[['X', 'X_numeric']].drop_duplicates().sort_values('X_numeric')
+        x_order = x_sorted['X'].tolist()
+    
+    if df['Y_numeric'].notna().all():
+        # Sort Y values numerically
+        y_sorted = df[['Y', 'Y_numeric']].drop_duplicates().sort_values('Y_numeric')
+        y_order = y_sorted['Y'].tolist()
+    
+    # Create pivot table with specified order
     pivot_df = df.pivot(index='Y', columns='X', values='Value')
     
-    # Sort indices for better display
-    pivot_df = pivot_df.sort_index()
-    pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
+    # Reindex to preserve order
+    pivot_df = pivot_df.reindex(index=y_order, columns=x_order)
     
     return pivot_df
 
@@ -146,6 +164,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis') -
     y = list(range(len(pivot_df.index)))
     z = pivot_df.values
     
+    # Create figure
     fig = go.Figure(data=go.Contour(
         z=z,
         x=x,
@@ -169,7 +188,8 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis') -
         tickvals=x,
         title='X',
         tickfont=dict(color='black'),
-        gridcolor='lightgray'
+        gridcolor='lightgray',
+        type='category'  # Treat as categorical to preserve order
     )
     
     fig.update_yaxes(
@@ -177,7 +197,8 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis') -
         tickvals=y,
         title='Y',
         tickfont=dict(color='black'),
-        gridcolor='lightgray'
+        gridcolor='lightgray',
+        type='category'  # Treat as categorical to preserve order
     )
     
     fig.update_layout(
@@ -190,30 +211,46 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis') -
     
     return fig
 
-def plotly_to_matplotlib_figure(plotly_fig, dpi=300):
-    """Convert Plotly figure to matplotlib figure for saving"""
-    # Create matplotlib figure
-    fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
-    
-    # This is a simplified approach - in practice, you might want to
-    # create separate matplotlib plots for each type of figure
-    # For now, we'll return a placeholder
-    return fig
-
-def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label, y_label, dpi=300):
+def save_all_plots_matplotlib(pivot_df, normalized_df, x_label, y_label, dpi=300, show_values=True):
     """Save all plots using matplotlib"""
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Convert index and columns to numeric if possible for proper sorting
+        try:
+            # Try to convert to numeric for sorting
+            x_vals = pd.to_numeric(pivot_df.columns, errors='ignore')
+            y_vals = pd.to_numeric(pivot_df.index, errors='ignore')
+            
+            # If conversion successful, sort numerically
+            if not isinstance(x_vals[0], str):
+                col_order = np.argsort(x_vals)
+                cols_sorted = [pivot_df.columns[i] for i in col_order]
+            else:
+                cols_sorted = pivot_df.columns.tolist()
+                
+            if not isinstance(y_vals[0], str):
+                row_order = np.argsort(y_vals)
+                rows_sorted = [pivot_df.index[i] for i in row_order]
+            else:
+                rows_sorted = pivot_df.index.tolist()
+                
+            pivot_df_sorted = pivot_df.loc[rows_sorted, cols_sorted]
+        except:
+            pivot_df_sorted = pivot_df
+        
         # 1. Main Heatmap
         fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
-        im = ax.imshow(pivot_df.values, aspect='auto', cmap='viridis')
+        
+        # Create heatmap
+        im = ax.imshow(pivot_df_sorted.values, aspect='auto', cmap='viridis', 
+                      extent=[0, len(pivot_df_sorted.columns), 0, len(pivot_df_sorted.index)])
         
         # Set ticks and labels
-        ax.set_xticks(np.arange(len(pivot_df.columns)))
-        ax.set_yticks(np.arange(len(pivot_df.index)))
-        ax.set_xticklabels(pivot_df.columns.tolist())
-        ax.set_yticklabels(pivot_df.index.tolist())
+        ax.set_xticks(np.arange(len(pivot_df_sorted.columns)) + 0.5)
+        ax.set_yticks(np.arange(len(pivot_df_sorted.index)) + 0.5)
+        ax.set_xticklabels(pivot_df_sorted.columns.tolist())
+        ax.set_yticklabels(pivot_df_sorted.index.tolist())
         
         # Rotate x labels for better visibility
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
@@ -227,11 +264,14 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
         ax.set_ylabel(y_label)
         ax.set_title('Main Heatmap')
         
+        # Add grid
+        ax.grid(False)
+        
         # Add values to cells if requested
-        if st.session_state.get('show_values', True):
-            for i in range(len(pivot_df.index)):
-                for j in range(len(pivot_df.columns)):
-                    text = ax.text(j, i, f'{pivot_df.values[i, j]:.2f}',
+        if show_values:
+            for i in range(len(pivot_df_sorted.index)):
+                for j in range(len(pivot_df_sorted.columns)):
+                    text = ax.text(j + 0.5, i + 0.5, f'{pivot_df_sorted.values[i, j]:.2f}',
                                   ha="center", va="center", color="w", fontsize=8)
         
         plt.tight_layout()
@@ -244,14 +284,22 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
         
         # 2. Normalized Heatmap (if available)
         if normalized_df is not None:
+            try:
+                # Sort normalized_df in same order
+                normalized_df_sorted = normalized_df.loc[rows_sorted, cols_sorted]
+            except:
+                normalized_df_sorted = normalized_df
+                
             fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
-            im = ax.imshow(normalized_df.values, aspect='auto', cmap='viridis', vmin=0, vmax=1)
+            im = ax.imshow(normalized_df_sorted.values, aspect='auto', cmap='viridis', 
+                          vmin=0, vmax=1,
+                          extent=[0, len(normalized_df_sorted.columns), 0, len(normalized_df_sorted.index)])
             
             # Set ticks and labels
-            ax.set_xticks(np.arange(len(normalized_df.columns)))
-            ax.set_yticks(np.arange(len(normalized_df.index)))
-            ax.set_xticklabels(normalized_df.columns.tolist())
-            ax.set_yticklabels(normalized_df.index.tolist())
+            ax.set_xticks(np.arange(len(normalized_df_sorted.columns)) + 0.5)
+            ax.set_yticks(np.arange(len(normalized_df_sorted.index)) + 0.5)
+            ax.set_xticklabels(normalized_df_sorted.columns.tolist())
+            ax.set_yticklabels(normalized_df_sorted.index.tolist())
             
             # Rotate x labels for better visibility
             plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
@@ -265,11 +313,14 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
             ax.set_ylabel(y_label)
             ax.set_title('Normalized Heatmap (0-1)')
             
+            # Add grid
+            ax.grid(False)
+            
             # Add values to cells if requested
-            if st.session_state.get('show_values', True):
-                for i in range(len(normalized_df.index)):
-                    for j in range(len(normalized_df.columns)):
-                        text = ax.text(j, i, f'{normalized_df.values[i, j]:.3f}',
+            if show_values:
+                for i in range(len(normalized_df_sorted.index)):
+                    for j in range(len(normalized_df_sorted.columns)):
+                        text = ax.text(j + 0.5, i + 0.5, f'{normalized_df_sorted.values[i, j]:.3f}',
                                       ha="center", va="center", color="w", fontsize=8)
             
             plt.tight_layout()
@@ -284,19 +335,20 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
         fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
         
         # Create meshgrid for contour plot
-        X, Y = np.meshgrid(np.arange(len(pivot_df.columns)), np.arange(len(pivot_df.index)))
+        X, Y = np.meshgrid(np.arange(len(pivot_df_sorted.columns)) + 0.5, 
+                          np.arange(len(pivot_df_sorted.index)) + 0.5)
         
         # Create contour plot
-        contour = ax.contourf(X, Y, pivot_df.values, cmap='viridis', levels=20)
+        contour = ax.contourf(X, Y, pivot_df_sorted.values, cmap='viridis', levels=20)
         
         # Add contour lines
-        ax.contour(X, Y, pivot_df.values, colors='black', linewidths=0.5, levels=10)
+        ax.contour(X, Y, pivot_df_sorted.values, colors='black', linewidths=0.5, levels=10)
         
         # Set ticks and labels
-        ax.set_xticks(np.arange(len(pivot_df.columns)))
-        ax.set_yticks(np.arange(len(pivot_df.index)))
-        ax.set_xticklabels(pivot_df.columns.tolist())
-        ax.set_yticklabels(pivot_df.index.tolist())
+        ax.set_xticks(np.arange(len(pivot_df_sorted.columns)) + 0.5)
+        ax.set_yticks(np.arange(len(pivot_df_sorted.index)) + 0.5)
+        ax.set_xticklabels(pivot_df_sorted.columns.tolist())
+        ax.set_yticklabels(pivot_df_sorted.index.tolist())
         
         # Rotate x labels for better visibility
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
@@ -318,34 +370,35 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
         zip_file.writestr('contour_plot.png', contour_buffer.getvalue())
         plt.close(fig)
         
-        # 4. Surface Plot (3D)
-        if len(pivot_df.columns) > 1 and len(pivot_df.index) > 1:
-            fig = plt.figure(figsize=(12, 9), dpi=dpi)
-            ax = fig.add_subplot(111, projection='3d')
-            
-            # Create meshgrid for 3D plot
-            X, Y = np.meshgrid(np.arange(len(pivot_df.columns)), np.arange(len(pivot_df.index)))
-            
-            # Create surface plot
-            surf = ax.plot_surface(X, Y, pivot_df.values, cmap='viridis', 
-                                  linewidth=0, antialiased=True, alpha=0.8)
-            
-            # Set labels
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_label)
-            ax.set_zlabel('Value')
-            ax.set_title('3D Surface Plot')
-            
-            # Add colorbar
-            fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, label='Value')
-            
-            plt.tight_layout()
-            
-            # Save to buffer
-            surface_buffer = io.BytesIO()
-            fig.savefig(surface_buffer, format='png', dpi=dpi, bbox_inches='tight')
-            zip_file.writestr('surface_plot_3d.png', surface_buffer.getvalue())
-            plt.close(fig)
+        # 4. Data table as image
+        fig, ax = plt.subplots(figsize=(12, 8), dpi=dpi)
+        ax.axis('tight')
+        ax.axis('off')
+        
+        # Create table
+        table_data = pivot_df_sorted.values.round(3)
+        row_labels = pivot_df_sorted.index.tolist()
+        col_labels = pivot_df_sorted.columns.tolist()
+        
+        table = ax.table(cellText=table_data,
+                        rowLabels=row_labels,
+                        colLabels=col_labels,
+                        cellLoc='center',
+                        loc='center')
+        
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1, 1.5)
+        
+        ax.set_title('Data Table', fontsize=16, pad=20)
+        
+        plt.tight_layout()
+        
+        # Save to buffer
+        table_buffer = io.BytesIO()
+        fig.savefig(table_buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr('data_table.png', table_buffer.getvalue())
+        plt.close(fig)
     
     return zip_buffer
 
@@ -353,6 +406,7 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label
 st.title("🔥 Heatmap Generator for Scientific Publications")
 st.markdown("""
 Upload data in X,Y,Value format (comma, tab or space separated) or use example data.
+Values will be displayed in their original order.
 """)
 
 # Sidebar for settings
@@ -364,6 +418,11 @@ with st.sidebar:
     x_label = st.text_input("X-axis label", value="X")
     y_label = st.text_input("Y-axis label", value="Y")
     colorbar_title = st.text_input("Colorbar title", value="Value")
+    
+    # Display options
+    st.subheader("Display Options")
+    sort_numerically = st.checkbox("Sort axes numerically", value=True, 
+                                   help="If unchecked, axes will be displayed in the order they appear in the data")
     
     # Font settings
     st.subheader("Font Settings")
@@ -421,8 +480,8 @@ with col1:
     # Example data
     example_choice = st.selectbox(
         "Select example data",
-        ["Upload your own data", "Example 1: Simple", "Example 2: With gaps", 
-         "Example 3: Numeric axes", "Example 4: Negative values"]
+        ["Upload your own data", "Example 1: Simple", "Example 2: Temperature data", 
+         "Example 3: With gaps", "Example 4: Negative values"]
     )
     
     if example_choice == "Example 1: Simple":
@@ -431,21 +490,57 @@ A,Jan,10
 A,Feb,20
 B,Jan,15
 B,Feb,25"""
-    elif example_choice == "Example 2: With gaps":
+    elif example_choice == "Example 2: Temperature data":
+        example_data = """X,Y,Value
+Method1,25,0.1
+Method1,50,0.2
+Method1,100,0.3
+Method1,150,0.4
+Method1,200,0.5
+Method1,250,0.6
+Method1,300,0.7
+Method1,350,0.8
+Method1,400,0.9
+Method1,450,1.0
+Method1,500,1.1
+Method1,550,1.2
+Method1,600,1.3
+Method1,650,1.4
+Method1,700,1.5
+Method1,750,1.6
+Method1,800,1.7
+Method1,850,1.8
+Method1,900,1.9
+Method1,950,2.0
+Method1,1000,2.1
+Method2,25,0.15
+Method2,50,0.25
+Method2,100,0.35
+Method2,150,0.45
+Method2,200,0.55
+Method2,250,0.65
+Method2,300,0.75
+Method2,350,0.85
+Method2,400,0.95
+Method2,450,1.05
+Method2,500,1.15
+Method2,550,1.25
+Method2,600,1.35
+Method2,650,1.45
+Method2,700,1.55
+Method2,750,1.65
+Method2,800,1.75
+Method2,850,1.85
+Method2,900,1.95
+Method2,950,2.05
+Method2,1000,2.15"""
+    elif example_choice == "Example 3: With gaps":
         example_data = """A\t1\t0.2
 \t2\t0.3
 \t3\t0.4
 B\t1\t0.25
 \t2\t0.35
 \t3\t0.45"""
-    elif example_choice == "Example 3: Numeric axes":
-        example_data = """X Y Value
-1 1 0.5
-1 2 0.7
-2 1 0.3
-2 2 0.9
-3 1 0.6
-3 2 0.4"""
     elif example_choice == "Example 4: Negative values":
         example_data = """X,Y,Value
 A,Jan,-10
@@ -484,6 +579,7 @@ C,Feb,-15"""
                     st.session_state.df = df
                     st.session_state.data_ready = True
                     st.session_state.show_values = show_values
+                    st.session_state.sort_numerically = sort_numerically
                 else:
                     st.error("Failed to process data. Please check the format.")
         else:
@@ -496,7 +592,7 @@ with col2:
         df = st.session_state.df
         
         st.subheader("Processed Data")
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df[['X', 'Y', 'Value']], use_container_width=True)
         
         st.subheader("Data Statistics")
         col_stats1, col_stats2 = st.columns(2)
@@ -511,7 +607,23 @@ with col2:
         st.subheader("Pivot Table")
         pivot_df = create_pivot_table(df)
         if pivot_df is not None:
+            # Apply numeric sorting if requested
+            if sort_numerically and 'X_numeric' in df.columns and 'Y_numeric' in df.columns:
+                try:
+                    # Sort columns numerically
+                    x_sorted = df[['X', 'X_numeric']].drop_duplicates().sort_values('X_numeric')
+                    y_sorted = df[['Y', 'Y_numeric']].drop_duplicates().sort_values('Y_numeric')
+                    
+                    # Reindex pivot table
+                    pivot_df = pivot_df.reindex(index=y_sorted['Y'], columns=x_sorted['X'])
+                except:
+                    pass
+            
             st.dataframe(pivot_df, use_container_width=True)
+            
+            # Show order information
+            st.info(f"X-axis order: {', '.join(pivot_df.columns.tolist()[:5])}{'...' if len(pivot_df.columns) > 5 else ''}")
+            st.info(f"Y-axis order: {', '.join(pivot_df.index.tolist()[:5])}{'...' if len(pivot_df.index) > 5 else ''}")
 
 # Plots area
 if 'df' in st.session_state and st.session_state.get('data_ready', False):
@@ -522,6 +634,18 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
     pivot_df = create_pivot_table(df)
     
     if pivot_df is not None:
+        # Apply numeric sorting if requested for plots
+        if sort_numerically and 'X_numeric' in df.columns and 'Y_numeric' in df.columns:
+            try:
+                # Sort columns numerically
+                x_sorted = df[['X', 'X_numeric']].drop_duplicates().sort_values('X_numeric')
+                y_sorted = df[['Y', 'Y_numeric']].drop_duplicates().sort_values('Y_numeric')
+                
+                # Reindex pivot table
+                pivot_df = pivot_df.reindex(index=y_sorted['Y'], columns=x_sorted['X'])
+            except:
+                pass
+        
         # Value format configuration
         if value_format == "Integer":
             text_format = ".0f"
@@ -589,11 +713,10 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                     font=dict(size=axis_font_size, color='black')
                 ),
                 tickfont=dict(size=tick_font_size, color='black'),
-                gridcolor='black',
-                linecolor='black',
-                mirror=True,
-                showline=True,
-                zeroline=False
+                type='category',  # Keep as categorical to preserve order
+                tickmode='array',
+                tickvals=list(range(len(pivot_df.columns))),
+                ticktext=pivot_df.columns.tolist()
             ),
             yaxis=dict(
                 title=dict(
@@ -601,11 +724,10 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                     font=dict(size=axis_font_size, color='black')
                 ),
                 tickfont=dict(size=tick_font_size, color='black'),
-                gridcolor='black',
-                linecolor='black',
-                mirror=True,
-                showline=True,
-                zeroline=False
+                type='category',  # Keep as categorical to preserve order
+                tickmode='array',
+                tickvals=list(range(len(pivot_df.index))),
+                ticktext=pivot_df.index.tolist()
             ),
             plot_bgcolor='white',
             paper_bgcolor='white',
@@ -618,7 +740,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
         
         # 2. NORMALIZED HEATMAP (only if all values are non-negative)
         normalized_df = None
-        if show_normalized and (pivot_df.values.min() >= 0):
+        if show_normalized:
             st.subheader("2. Normalized Heatmap (0-1)")
             
             normalized_df = normalize_data(pivot_df)
@@ -658,14 +780,22 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                             text=x_label,
                             font=dict(size=axis_font_size, color='black')
                         ),
-                        tickfont=dict(size=tick_font_size, color='black')
+                        tickfont=dict(size=tick_font_size, color='black'),
+                        type='category',
+                        tickmode='array',
+                        tickvals=list(range(len(normalized_df.columns))),
+                        ticktext=normalized_df.columns.tolist()
                     ),
                     yaxis=dict(
                         title=dict(
                             text=y_label,
                             font=dict(size=axis_font_size, color='black')
                         ),
-                        tickfont=dict(size=tick_font_size, color='black')
+                        tickfont=dict(size=tick_font_size, color='black'),
+                        type='category',
+                        tickmode='array',
+                        tickvals=list(range(len(normalized_df.index))),
+                        ticktext=normalized_df.index.tolist()
                     ),
                     plot_bgcolor='white',
                     paper_bgcolor='white',
@@ -676,8 +806,6 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                 st.plotly_chart(fig2, use_container_width=True)
             else:
                 st.info("Normalization not required or impossible (all values are equal)")
-        elif show_normalized:
-            st.info("Normalized plot not shown because there are negative values")
         
         # 3. CONTOUR MAP (smooth transition)
         if show_contour:
@@ -700,33 +828,33 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
         with col_export1:
             if st.button("📦 Save All Plots (ZIP)"):
                 try:
-                    with st.spinner("Creating ZIP archive..."):
+                    with st.spinner("Creating ZIP archive with high-resolution images..."):
                         # Create normalized_df if not already created
-                        if normalized_df is None and show_normalized and (pivot_df.values.min() >= 0):
+                        if normalized_df is None and show_normalized:
                             normalized_df = normalize_data(pivot_df)
                         
                         # Save all plots using matplotlib
                         zip_buffer = save_all_plots_matplotlib(
-                            pivot_df, normalized_df, fig1, fig2, fig3, 
-                            x_label, y_label, dpi=save_dpi
+                            pivot_df, normalized_df, x_label, y_label, 
+                            dpi=save_dpi, show_values=show_values
                         )
                         
                         # Create download button for ZIP
                         st.download_button(
-                            label="Download ZIP Archive",
+                            label=f"Download ZIP ({save_dpi} DPI)",
                             data=zip_buffer.getvalue(),
-                            file_name="heatmap_plots.zip",
+                            file_name=f"heatmap_plots_{save_dpi}dpi.zip",
                             mime="application/zip"
                         )
                         
-                        st.success(f"All plots saved with {save_dpi} DPI resolution!")
+                        st.success(f"✅ All plots saved with {save_dpi} DPI resolution!")
                         
                 except Exception as e:
-                    st.error(f"Error saving plots: {e}")
+                    st.error(f"Error saving plots: {str(e)}")
                     
         with col_export2:
             # Export data
-            csv = df.to_csv(index=False)
+            csv = df[['X', 'Y', 'Value']].to_csv(index=False)
             st.download_button(
                 label="Download Data (CSV)",
                 data=csv,
@@ -751,59 +879,37 @@ with st.expander("📋 Data Format Information"):
     
     1. **CSV format**: X,Y,Value separated by comma
     ```
-    A,Jan,10
-    A,Feb,20
-    B,Jan,15
-    B,Feb,25
+    Temperature,Pressure,Value
+    25,1,0.1
+    50,1,0.2
+    100,1,0.3
+    150,1,0.4
     ```
     
     2. **TSV format**: X,Y,Value separated by tab
     ```
-    A	Jan	10
-    A	Feb	20
-    B	Jan	15
-    B	Feb	25
+    Temperature	Pressure	Value
+    25	1	0.1
+    50	1	0.2
+    100	1	0.3
+    150	1	0.4
     ```
     
     3. **Space separated**: X Y Value separated by space
     ```
-    A Jan 10
-    A Feb 20
-    B Jan 15
-    B Feb 25
+    Temperature Pressure Value
+    25 1 0.1
+    50 1 0.2
+    100 1 0.3
+    150 1 0.4
     ```
     
-    ### Handling Incomplete Data:
+    ### Key Features:
     
-    The app automatically handles data with missing X values:
-    
-    **Input data:**
-    ```
-    A	
-    1	0.2
-    2	0.3
-    3	0.4
-    B	
-    1	0.25
-    2	0.35
-    3	0.45
-    ```
-    
-    **Will be converted to:**
-    ```
-    A,1,0.2
-    A,2,0.3
-    A,3,0.4
-    B,1,0.25
-    B,2,0.35
-    B,3,0.45
-    ```
-    
-    ### Plot Types:
-    
-    1. **Main Heatmap** - Classic heatmap with clear borders
-    2. **Normalized Heatmap** - Values normalized to 0-1 range
-    3. **Contour Map** - Smooth transition between values (height map)
+    - **Preserves axis order**: Values are displayed in the order they appear in your data
+    - **Numeric sorting option**: Optional automatic numeric sorting of axis values
+    - **High-resolution export**: Save all plots as PNG images with configurable DPI (100-600)
+    - **Multiple plot types**: Heatmaps, normalized plots, and contour maps
     """)
 
 # Footer
