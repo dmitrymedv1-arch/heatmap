@@ -274,18 +274,15 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
             title='3D Surface Plot',
             scene=dict(
                 xaxis=dict(
-                    title=x_label, 
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=x_label, font=dict(color='black', size=12)), 
                     tickfont=dict(color='black')
                 ),
                 yaxis=dict(
-                    title=y_label, 
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=y_label, font=dict(color='black', size=12)),
                     tickfont=dict(color='black')
                 ),
                 zaxis=dict(
-                    title=colorbar_title,
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=colorbar_title, font=dict(color='black', size=12)),
                     tickfont=dict(color='black')
                 ),
                 aspectmode='manual',
@@ -318,23 +315,20 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
         
         # Update wireframe appearance
         fig_wire.update_traces(contours_z=dict(show=True, usecolormap=True, project_z=True))
-        
+
         fig_wire.update_layout(
             title='3D Wireframe Plot',
             scene=dict(
                 xaxis=dict(
-                    title=x_label,
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=x_label, font=dict(color='black', size=12)),
                     tickfont=dict(color='black')
                 ),
                 yaxis=dict(
-                    title=y_label,
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=y_label, font=dict(color='black', size=12)),
                     tickfont=dict(color='black')
                 ),
                 zaxis=dict(
-                    title=colorbar_title,
-                    titlefont=dict(color='black', size=12),
+                    title=dict(text=colorbar_title, font=dict(color='black', size=12)),
                     tickfont=dict(color='black')
                 )
             ),
@@ -1317,4 +1311,5 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
+
 
