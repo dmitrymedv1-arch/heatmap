@@ -153,17 +153,16 @@ def create_smooth_contour(pivot_df: pd.DataFrame) -> go.Figure:
             labelfont=dict(size=12, color='black'),
         ),
         line=dict(width=0),  # Убираем линии контуров для плавного перехода
-        hoverongaps=False
-    ))
-    
-    # Добавляем colorbar отдельно через update_layout
-    fig.update_layout(
-        coloraxis_colorbar=dict(
-            title='Значение',
+        hoverongaps=False,
+        colorbar=dict(  # Добавляем colorbar прямо в объект Contour
+            title=dict(
+                text='Значение',
+                font=dict(color='black')
+            ),
             titleside='right',
             tickfont=dict(color='black')
         )
-    )
+    ))
     
     # Настройка осей
     fig.update_xaxes(
@@ -714,4 +713,5 @@ st.markdown("---")
 st.markdown("""
 **Приложение для генерации тепловых карт** | Оптимизировано для научных публикаций
 """)
+
 
