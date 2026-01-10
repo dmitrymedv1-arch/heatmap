@@ -902,7 +902,7 @@ with col2:
         with col_stats2:
             st.metric("Unique Y values", df['Y'].nunique())
             st.metric("Value range", 
-                     f"{df['Value'].min():.2f} - {df['Value'].max():.2f}")
+                     f"{float(df['Value'].min()):.2f} - {float(df['Value'].max()):.2f}")
         
         st.subheader("Pivot Table")
         pivot_df = create_pivot_table(df)
@@ -1311,5 +1311,6 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
+
 
 
