@@ -6,57 +6,58 @@ import plotly.express as px
 import io
 import re
 from typing import List, Optional, Tuple
+import kaleido  # Для сохранения изображений
 
-# Настройка страницы
+# Page configuration
 st.set_page_config(
     page_title="Heatmap Generator",
     page_icon="🔥",
     layout="wide"
 )
 
-# Функции для обработки данных
+# Data processing functions
 def preprocess_uploaded_content(content: str) -> str:
     """
-    Предобработка загруженного контента для обработки неполных случаев
+    Preprocess uploaded content for handling incomplete cases
     """
     lines = content.strip().split('\n')
     processed_lines = []
     last_x_value = None
     
     for line in lines:
-        # Удаляем лишние пробелы в начале и конце строки
+        # Remove extra spaces at the beginning and end of the line
         line = line.strip()
         
-        # Пропускаем пустые строки
+        # Skip empty lines
         if not line:
             continue
             
-        # Разделяем строку на части (табуляция, запятая, пробел)
+        # Split the line into parts (tab, comma, space)
         if '\t' in line:
             parts = line.split('\t')
         elif ',' in line:
             parts = line.split(',')
         else:
-            # Разделение по пробелам (учитываем множественные пробелы)
+            # Split by spaces (consider multiple spaces)
             parts = re.split(r'\s+', line)
         
-        # Удаляем пустые элементы
+        # Remove empty elements
         parts = [p.strip() for p in parts if p.strip()]
         
-        # Обработка случаев с недостающими значениями X
+        # Handle cases with missing X values
         if len(parts) == 1:
-            # Если только одно значение, это может быть новый X
+            # If only one value, it could be a new X
             last_x_value = parts[0]
             continue
         elif len(parts) == 2:
-            # Если два значения, это может быть Y и Value без X
+            # If two values, it could be Y and Value without X
             if last_x_value is not None:
                 processed_lines.append(f"{last_x_value},{parts[0]},{parts[1]}")
             else:
-                # Если X не определен ранее, пропускаем или используем пустое значение
+                # If X is not previously defined, skip or use empty value
                 continue
         elif len(parts) >= 3:
-            # Полная строка с X, Y и Value
+            # Complete string with X, Y and Value
             processed_lines.append(f"{parts[0]},{parts[1]},{parts[2]}")
             last_x_value = parts[0]
     
@@ -64,51 +65,51 @@ def preprocess_uploaded_content(content: str) -> str:
 
 def parse_data(content: str) -> pd.DataFrame:
     """
-    Парсинг данных из строки в DataFrame
+    Parse data from string to DataFrame
     """
-    # Предобработка данных
+    # Preprocess data
     processed_content = preprocess_uploaded_content(content)
     
-    # Чтение данных
+    # Read data
     try:
-        # Пробуем разные разделители
+        # Try different delimiters
         for delimiter in [',', '\t', ' ']:
             try:
-                # Пробуем прочитать как CSV
+                # Try to read as CSV
                 df = pd.read_csv(io.StringIO(processed_content), sep=delimiter, header=None, engine='python')
                 if df.shape[1] >= 3:
-                    df = df.iloc[:, :3]  # Берем только первые 3 столбца
+                    df = df.iloc[:, :3]  # Take only first 3 columns
                     df.columns = ['X', 'Y', 'Value']
                     break
             except:
                 continue
     except Exception as e:
-        st.error(f"Ошибка при чтении данных: {e}")
+        st.error(f"Error reading data: {e}")
         return None
     
-    # Преобразуем числовые значения
+    # Convert to string for categorical data
     df['X'] = df['X'].astype(str)
     df['Y'] = df['Y'].astype(str)
     
-    # Пробуем преобразовать Value в числовой формат
+    # Try to convert Value to numeric format
     try:
         df['Value'] = pd.to_numeric(df['Value'])
     except:
-        st.warning("Не удалось преобразовать значения в числовой формат. Используются строки.")
+        st.warning("Could not convert values to numeric format. Using strings.")
     
     return df
 
 def create_pivot_table(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Создание сводной таблицы для тепловой карты
+    Create pivot table for heatmap
     """
     if df is None or df.empty:
         return None
     
-    # Создаем сводную таблицу
+    # Create pivot table
     pivot_df = df.pivot(index='Y', columns='X', values='Value')
     
-    # Сортируем индексы для лучшего отображения
+    # Sort indices for better display
     pivot_df = pivot_df.sort_index()
     pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
     
@@ -116,7 +117,7 @@ def create_pivot_table(df: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_data(pivot_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Нормировка данных (0-1)
+    Normalize data (0-1)
     """
     if pivot_df is None or pivot_df.empty:
         return None
@@ -127,18 +128,18 @@ def normalize_data(pivot_df: pd.DataFrame) -> pd.DataFrame:
     if max_val == min_val:
         return pivot_df
     
-    # Нормировка
+    # Normalization
     normalized_df = (pivot_df - min_val) / (max_val - min_val)
     return normalized_df
 
-def create_smooth_contour(pivot_df: pd.DataFrame) -> go.Figure:
+def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'Viridis') -> go.Figure:
     """
-    Создание плавного контурного графика (карта высот)
+    Create smooth contour plot (height map)
     """
     if pivot_df is None or pivot_df.empty:
         return None
     
-    # Преобразуем данные для контурного графика
+    # Prepare data for contour plot
     x = list(range(len(pivot_df.columns)))
     y = list(range(len(pivot_df.index)))
     z = pivot_df.values
@@ -147,24 +148,20 @@ def create_smooth_contour(pivot_df: pd.DataFrame) -> go.Figure:
         z=z,
         x=x,
         y=y,
-        colorscale='Viridis',
+        colorscale=colorscale,
         contours=dict(
             showlabels=True,
             labelfont=dict(size=12, color='black'),
         ),
-        line=dict(width=0),  # Убираем линии контуров для плавный переход
+        line=dict(width=0),  # Remove contour lines for smooth transition
         hoverongaps=False,
         colorbar=dict(
-            title=dict(
-                text='Значение',
-                side='right',  # <-- ИЗМЕНИЛ 'titleside' на 'side' внутри title
-                font=dict(color='black')
-            ),
+            title='Value',
             tickfont=dict(color='black')
         )
     ))
     
-    # Настройка осей
+    # Configure axes
     fig.update_xaxes(
         ticktext=pivot_df.columns.tolist(),
         tickvals=x,
@@ -182,7 +179,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame) -> go.Figure:
     )
     
     fig.update_layout(
-        title='Контурная карта (плавный переход)',
+        title='Contour Map (smooth transition)',
         plot_bgcolor='white',
         paper_bgcolor='white',
         width=600,
@@ -191,91 +188,91 @@ def create_smooth_contour(pivot_df: pd.DataFrame) -> go.Figure:
     
     return fig
 
-# Основной интерфейс
-st.title("🔥 Генератор тепловых карт для научных публикаций")
+# Main interface
+st.title("🔥 Heatmap Generator for Scientific Publications")
 st.markdown("""
-Загрузите данные в формате X,Y,Value (через запятую, табуляцию или пробел) или используйте примеры данных.
+Upload data in X,Y,Value format (comma, tab or space separated) or use example data.
 """)
 
-# Боковая панель для настроек
+# Sidebar for settings
 with st.sidebar:
-    st.header("Настройки графиков")
+    st.header("Plot Settings")
     
-    # Настройки осей
-    st.subheader("Настройки осей")
-    x_label = st.text_input("Название оси X", value="X")
-    y_label = st.text_input("Название оси Y", value="Y")
-    colorbar_title = st.text_input("Название шкалы", value="Значение")
+    # Axis settings
+    st.subheader("Axis Settings")
+    x_label = st.text_input("X-axis label", value="X")
+    y_label = st.text_input("Y-axis label", value="Y")
+    colorbar_title = st.text_input("Colorbar title", value="Value")
     
-    # Настройки шрифтов
-    st.subheader("Настройки шрифтов")
-    axis_font_size = st.slider("Размер шрифта осей", 8, 24, 14)
-    tick_font_size = st.slider("Размер шрифта значений", 8, 20, 12)
-    colorbar_font_size = st.slider("Размер шрифта шкалы", 8, 20, 12)
+    # Font settings
+    st.subheader("Font Settings")
+    axis_font_size = st.slider("Axis font size", 8, 24, 14)
+    tick_font_size = st.slider("Tick font size", 8, 20, 12)
+    colorbar_font_size = st.slider("Colorbar font size", 8, 20, 12)
     
-    # Настройки отображения
-    st.subheader("Отображение данных")
-    show_values = st.checkbox("Показывать значения в ячейках", value=True)
-    value_format = st.selectbox("Формат значений", 
-                               ["Авто", "Целые числа", "Два знака", "Три знака", "Научный"])
+    # Display settings
+    st.subheader("Data Display")
+    show_values = st.checkbox("Show values in cells", value=True)
+    value_format = st.selectbox("Value format", 
+                               ["Auto", "Integer", "Two decimals", "Three decimals", "Scientific"])
     
-    # Выбор цветовой палитры
-    st.subheader("Цветовая палитра")
+    # Color palette selection
+    st.subheader("Color Palette")
     
-    # Встроенные палитры Plotly
+    # Built-in Plotly palettes
     builtin_palettes = [
         "Viridis", "Plasma", "Inferno", "Magma", "Cividis",
         "Greys", "RdBu", "RdYlBu", "Picnic", "Rainbow",
         "Portland", "Jet", "Hot", "Blackbody", "Electric"
     ]
     
-    selected_palette = st.selectbox("Выберите палитру", builtin_palettes, index=0)
+    selected_palette = st.selectbox("Select palette", builtin_palettes, index=0)
     
-    # Пользовательская палитра
+    # Custom palette
     st.markdown("---")
-    st.subheader("Пользовательская палитра")
-    use_custom_palette = st.checkbox("Использовать собственную палитру")
+    st.subheader("Custom Palette")
+    use_custom_palette = st.checkbox("Use custom palette")
     
     custom_colors = []
     if use_custom_palette:
-        color_count = st.slider("Количество цветов в палитре", 2, 10, 3)
+        color_count = st.slider("Number of colors in palette", 2, 10, 3)
         for i in range(color_count):
-            color = st.color_picker(f"Цвет {i+1}", value="#%06x" % (i * 255 // color_count))
+            color = st.color_picker(f"Color {i+1}", value="#%06x" % (i * 255 // color_count))
             custom_colors.append(color)
     
-    # Настройки дополнительных графиков
+    # Additional plots settings
     st.markdown("---")
-    st.subheader("Дополнительные графики")
-    show_normalized = st.checkbox("Показать нормированный график", value=True)
-    show_contour = st.checkbox("Показать контурную карту", value=True)
+    st.subheader("Additional Plots")
+    show_normalized = st.checkbox("Show normalized plot", value=True)
+    show_contour = st.checkbox("Show contour map", value=True)
 
-# Основная область
+# Main area
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.header("Загрузка данных")
+    st.header("Data Upload")
     
-    # Примеры данных
+    # Example data
     example_choice = st.selectbox(
-        "Выберите пример данных",
-        ["Загрузите свои данные", "Пример 1: Простой", "Пример 2: С пропусками", 
-         "Пример 3: Числовые оси", "Пример 4: Отрицательные значения"]
+        "Select example data",
+        ["Upload your own data", "Example 1: Simple", "Example 2: With gaps", 
+         "Example 3: Numeric axes", "Example 4: Negative values"]
     )
     
-    if example_choice == "Пример 1: Простой":
+    if example_choice == "Example 1: Simple":
         example_data = """X,Y,Value
 A,Jan,10
 A,Feb,20
 B,Jan,15
 B,Feb,25"""
-    elif example_choice == "Пример 2: С пропусками":
+    elif example_choice == "Example 2: With gaps":
         example_data = """A\t1\t0.2
 \t2\t0.3
 \t3\t0.4
 B\t1\t0.25
 \t2\t0.35
 \t3\t0.45"""
-    elif example_choice == "Пример 3: Числовые оси":
+    elif example_choice == "Example 3: Numeric axes":
         example_data = """X Y Value
 1 1 0.5
 1 2 0.7
@@ -283,7 +280,7 @@ B\t1\t0.25
 2 2 0.9
 3 1 0.6
 3 2 0.4"""
-    elif example_choice == "Пример 4: Отрицательные значения":
+    elif example_choice == "Example 4: Negative values":
         example_data = """X,Y,Value
 A,Jan,-10
 A,Feb,20
@@ -294,16 +291,16 @@ C,Feb,-15"""
     else:
         example_data = ""
     
-    # Поле для ввода данных
+    # Data input field
     data_input = st.text_area(
-        "Введите данные (X, Y, Value через запятую, табуляцию или пробел):",
+        "Enter data (X, Y, Value separated by comma, tab or space):",
         value=example_data,
         height=200
     )
     
-    # Загрузка файла
+    # File upload
     uploaded_file = st.file_uploader(
-        "Или загрузите файл",
+        "Or upload a file",
         type=['txt', 'csv', 'tsv', 'dat']
     )
     
@@ -311,81 +308,81 @@ C,Feb,-15"""
         content = uploaded_file.read().decode('utf-8')
         data_input = content
     
-    # Кнопка обработки
-    if st.button("Создать тепловые карты", type="primary"):
+    # Process button
+    if st.button("Generate Heatmaps", type="primary"):
         if data_input.strip():
-            with st.spinner("Обработка данных..."):
+            with st.spinner("Processing data..."):
                 df = parse_data(data_input)
                 
                 if df is not None and not df.empty:
                     st.session_state.df = df
                     st.session_state.data_ready = True
                 else:
-                    st.error("Не удалось обработать данные. Проверьте формат.")
+                    st.error("Failed to process data. Please check the format.")
         else:
-            st.warning("Пожалуйста, введите данные или загрузите файл.")
+            st.warning("Please enter data or upload a file.")
 
 with col2:
-    st.header("Предварительный просмотр данных")
+    st.header("Data Preview")
     
     if 'df' in st.session_state and st.session_state.get('data_ready', False):
         df = st.session_state.df
         
-        st.subheader("Обработанные данные")
+        st.subheader("Processed Data")
         st.dataframe(df, use_container_width=True)
         
-        st.subheader("Статистика данных")
+        st.subheader("Data Statistics")
         col_stats1, col_stats2 = st.columns(2)
         with col_stats1:
-            st.metric("Количество строк", len(df))
-            st.metric("Уникальных X", df['X'].nunique())
+            st.metric("Number of rows", len(df))
+            st.metric("Unique X values", df['X'].nunique())
         with col_stats2:
-            st.metric("Уникальных Y", df['Y'].nunique())
-            st.metric("Диапазон значений", 
+            st.metric("Unique Y values", df['Y'].nunique())
+            st.metric("Value range", 
                      f"{df['Value'].min():.2f} - {df['Value'].max():.2f}")
         
-        st.subheader("Сводная таблица")
+        st.subheader("Pivot Table")
         pivot_df = create_pivot_table(df)
         if pivot_df is not None:
             st.dataframe(pivot_df, use_container_width=True)
 
-# Область графиков
+# Plots area
 if 'df' in st.session_state and st.session_state.get('data_ready', False):
     st.markdown("---")
-    st.header("Тепловые карты")
+    st.header("Heatmaps")
     
     df = st.session_state.df
     pivot_df = create_pivot_table(df)
     
     if pivot_df is not None:
-        # Настройка формата значений
-        if value_format == "Целые числа":
+        # Value format configuration
+        if value_format == "Integer":
             text_format = ".0f"
-        elif value_format == "Два знака":
+        elif value_format == "Two decimals":
             text_format = ".2f"
-        elif value_format == "Три знака":
+        elif value_format == "Three decimals":
             text_format = ".3f"
-        elif value_format == "Научный":
+        elif value_format == "Scientific":
             text_format = ".2e"
         else:
-            # Автоматический выбор формата
+            # Automatic format selection
             if df['Value'].dtype == np.int64:
                 text_format = ".0f"
             else:
                 text_format = ".2f"
         
-        # Создание цветовой шкалы
+        # Create color scale
         if use_custom_palette and custom_colors:
-            # Пользовательская цветовая шкала
+            # Custom color scale
             colorscale = [[i/(len(custom_colors)-1), color] for i, color in enumerate(custom_colors)]
         else:
-            # Использование встроенной палитры
+            # Use built-in palette
             colorscale = selected_palette
         
-        # 1. ОСНОВНАЯ ТЕПЛОВАЯ КАРТА
-        st.subheader("1. Основная тепловая карта")
+        # 1. MAIN HEATMAP
+        st.subheader("1. Main Heatmap")
         
-        # Создание текста для ячеек
+        # Create text for cells
         if show_values:
             text_matrix = np.round(pivot_df.values, 
                                   0 if text_format == ".0f" else 
@@ -394,7 +391,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
             text_matrix = text_matrix.astype(str)
         else:
             text_matrix = None
-
+        
         fig1 = go.Figure(data=go.Heatmap(
             z=pivot_df.values,
             x=pivot_df.columns.tolist(),
@@ -405,20 +402,17 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
             hoverongaps=False,
             hoverinfo='x+y+z',
             colorbar=dict(
-                title=dict(
-                    text=colorbar_title,
-                    font=dict(size=colorbar_font_size, color='black')
-                ),
+                title=colorbar_title,
                 tickfont=dict(size=colorbar_font_size-2, color='black')
             ),
             xgap=1,
             ygap=1
         ))
         
-        # Настройка макета для основного графика
+        # Layout configuration for main plot
         fig1.update_layout(
             title=dict(
-                text="Тепловая карта (с границами)",
+                text="Heatmap (with borders)",
                 font=dict(size=16, color='black'),
                 x=0.5
             ),
@@ -455,14 +449,14 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
         
         st.plotly_chart(fig1, use_container_width=True)
         
-        # 2. НОРМИРОВАННАЯ ТЕПЛОВАЯ КАРТА (только если все значения неотрицательны)
+        # 2. NORMALIZED HEATMAP (only if all values are non-negative)
         if show_normalized and (pivot_df.values.min() >= 0):
-            st.subheader("2. Нормированная тепловая карта (0-1)")
+            st.subheader("2. Normalized Heatmap (0-1)")
             
             normalized_df = normalize_data(pivot_df)
             
             if normalized_df is not None:
-                # Создание текста для ячеек
+                # Create text for cells
                 if show_values:
                     norm_text_matrix = np.round(normalized_df.values, 3).astype(str)
                 else:
@@ -478,10 +472,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                     hoverongaps=False,
                     hoverinfo='x+y+z',
                     colorbar=dict(
-                        title=dict(
-                            text="Нормированное значение (0-1)",
-                            font=dict(size=colorbar_font_size, color='black')
-                        ),
+                        title="Normalized Value (0-1)",
                         tickfont=dict(size=colorbar_font_size-2, color='black')
                     ),
                     xgap=1,
@@ -490,7 +481,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                 
                 fig2.update_layout(
                     title=dict(
-                        text="Нормированная тепловая карта",
+                        text="Normalized Heatmap",
                         font=dict(size=16, color='black'),
                         x=0.5
                     ),
@@ -516,29 +507,29 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                 
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                st.info("Нормировка не требуется или невозможна (все значения одинаковы)")
+                st.info("Normalization not required or impossible (all values are equal)")
         elif show_normalized:
-            st.info("Нормированный график не показан, так как есть отрицательные значения")
+            st.info("Normalized plot not shown because there are negative values")
         
-        # 3. КОНТУРНАЯ КАРТА (плавный переход)
+        # 3. CONTOUR MAP (smooth transition)
         if show_contour:
-            st.subheader("3. Контурная карта (плавный переход)")
+            st.subheader("3. Contour Map (smooth transition)")
             
-            fig3 = create_smooth_contour(pivot_df)
+            fig3 = create_smooth_contour(pivot_df, selected_palette)
             if fig3:
-                # Обновляем названия осей
+                # Update axis labels
                 fig3.update_xaxes(title_text=x_label)
                 fig3.update_yaxes(title_text=y_label)
                 
                 st.plotly_chart(fig3, use_container_width=True)
                 
-                # Дополнительные варианты контурной карты
-                st.markdown("**Варианты контурной карты:**")
+                # Additional contour map variants
+                st.markdown("**Contour Map Variants:**")
                 
                 col_cont1, col_cont2 = st.columns(2)
                 
                 with col_cont1:
-                    # Контурная карта с линиями
+                    # Contour map with lines
                     fig3_lines = go.Figure(data=go.Contour(
                         z=pivot_df.values,
                         x=list(range(len(pivot_df.columns))),
@@ -549,14 +540,9 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                             showlabels=True,
                             labelfont=dict(size=10, color='black')
                         ),
-                        line=dict(width=2)
+                        line=dict(width=2),
+                        colorbar=dict(title='Value')
                     ))
-                    
-                    fig3_lines.update_layout(
-                        coloraxis_colorbar=dict(
-                            title='Значение'
-                        )
-                    )
                     
                     fig3_lines.update_xaxes(
                         ticktext=pivot_df.columns.tolist(),
@@ -570,7 +556,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                     )
                     
                     fig3_lines.update_layout(
-                        title='Контурная карта (с линиями)',
+                        title='Contour Map (with lines)',
                         plot_bgcolor='white',
                         paper_bgcolor='white',
                         height=400
@@ -579,7 +565,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                     st.plotly_chart(fig3_lines, use_container_width=True)
                 
                 with col_cont2:
-                    # 3D поверхность
+                    # 3D Surface plot
                     if len(pivot_df.columns) > 1 and len(pivot_df.index) > 1:
                         fig3_surface = go.Figure(data=go.Surface(
                             z=pivot_df.values,
@@ -591,11 +577,12 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                                     highlightcolor="limegreen",
                                     project=dict(z=True)
                                 )
-                            )
+                            ),
+                            colorbar=dict(title='Value')
                         ))
                         
                         fig3_surface.update_layout(
-                            title='3D поверхность',
+                            title='3D Surface Plot',
                             scene=dict(
                                 xaxis=dict(title=x_label, ticktext=pivot_df.columns.tolist()),
                                 yaxis=dict(title=y_label, ticktext=pivot_df.index.tolist()),
@@ -610,48 +597,79 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                         
                         st.plotly_chart(fig3_surface, use_container_width=True)
         
-        # Опции экспорта
+        # Export options
         st.markdown("---")
-        st.subheader("Экспорт графиков")
+        st.subheader("Export Options")
         
         col_export1, col_export2, col_export3 = st.columns(3)
         
         with col_export1:
-            if st.button("Сохранить все графики"):
-                # Сохранение графиков
-                fig1.write_image("heatmap_main.png")
-                if show_normalized and (pivot_df.values.min() >= 0) and normalized_df is not None:
-                    fig2.write_image("heatmap_normalized.png")
-                if show_contour and fig3:
-                    fig3.write_image("contour_map.png")
-                st.success("Графики сохранены в PNG формате")
-                
+            if st.button("Save All Plots"):
+                try:
+                    # Save plots using Streamlit's download functionality
+                    import base64
+                    
+                    # Convert figures to bytes
+                    img1_bytes = fig1.to_image(format="png")
+                    img2_bytes = fig2.to_image(format="png") if 'fig2' in locals() and show_normalized and pivot_df.values.min() >= 0 else None
+                    img3_bytes = fig3.to_image(format="png") if 'fig3' in locals() and show_contour else None
+                    
+                    # Create download buttons
+                    st.download_button(
+                        label="Download Main Heatmap",
+                        data=img1_bytes,
+                        file_name="heatmap_main.png",
+                        mime="image/png"
+                    )
+                    
+                    if img2_bytes:
+                        st.download_button(
+                            label="Download Normalized Heatmap",
+                            data=img2_bytes,
+                            file_name="heatmap_normalized.png",
+                            mime="image/png"
+                        )
+                    
+                    if img3_bytes:
+                        st.download_button(
+                            label="Download Contour Map",
+                            data=img3_bytes,
+                            file_name="contour_map.png",
+                            mime="image/png"
+                        )
+                    
+                    st.success("Plots are ready for download")
+                    
+                except Exception as e:
+                    st.error(f"Error saving plots: {e}")
+                    st.info("Note: Plot saving requires the kaleido package. Install it with: pip install kaleido")
+                    
         with col_export2:
-            # Экспорт данных
+            # Export data
             csv = df.to_csv(index=False)
             st.download_button(
-                label="Скачать данные (CSV)",
+                label="Download Data (CSV)",
                 data=csv,
                 file_name="heatmap_data.csv",
                 mime="text/csv"
             )
             
         with col_export3:
-            # Экспорт сводной таблицы
+            # Export pivot table
             pivot_csv = pivot_df.to_csv()
             st.download_button(
-                label="Скачать сводную таблицу",
+                label="Download Pivot Table",
                 data=pivot_csv,
                 file_name="pivot_table.csv",
                 mime="text/csv"
             )
 
-# Информация о формате данных
-with st.expander("📋 Информация о формате данных"):
+# Data format information
+with st.expander("📋 Data Format Information"):
     st.markdown("""
-    ### Поддерживаемые форматы данных:
+    ### Supported Data Formats:
     
-    1. **CSV формат**: X,Y,Value через запятую
+    1. **CSV format**: X,Y,Value separated by comma
     ```
     A,Jan,10
     A,Feb,20
@@ -659,7 +677,7 @@ with st.expander("📋 Информация о формате данных"):
     B,Feb,25
     ```
     
-    2. **TSV формат**: X,Y,Value через табуляцию
+    2. **TSV format**: X,Y,Value separated by tab
     ```
     A	Jan	10
     A	Feb	20
@@ -667,7 +685,7 @@ with st.expander("📋 Информация о формате данных"):
     B	Feb	25
     ```
     
-    3. **Пробелы**: X Y Value через пробел
+    3. **Space separated**: X Y Value separated by space
     ```
     A Jan 10
     A Feb 20
@@ -675,11 +693,11 @@ with st.expander("📋 Информация о формате данных"):
     B Feb 25
     ```
     
-    ### Обработка неполных данных:
+    ### Handling Incomplete Data:
     
-    Приложение автоматически обрабатывает данные с пропущенными значениями X:
+    The app automatically handles data with missing X values:
     
-    **Входные данные:**
+    **Input data:**
     ```
     A	
     1	0.2
@@ -691,7 +709,7 @@ with st.expander("📋 Информация о формате данных"):
     3	0.45
     ```
     
-    **Будут преобразованы в:**
+    **Will be converted to:**
     ```
     A,1,0.2
     A,2,0.3
@@ -701,19 +719,40 @@ with st.expander("📋 Информация о формате данных"):
     B,3,0.45
     ```
     
-    ### Типы графиков:
+    ### Plot Types:
     
-    1. **Основная тепловая карта** - классическая heatmap с четкими границами
-    2. **Нормированная тепловая карта** - значения преобразованы к диапазону 0-1
-    3. **Контурная карта** - плавный переход между значениями (карта высот)
+    1. **Main Heatmap** - Classic heatmap with clear borders
+    2. **Normalized Heatmap** - Values normalized to 0-1 range
+    3. **Contour Map** - Smooth transition between values (height map)
     """)
 
-# Футер
+# Footer
 st.markdown("---")
 st.markdown("""
-**Приложение для генерации тепловых карт** | Оптимизировано для научных публикаций
+**Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
 
-
-
-
+# Add installation instructions in an expander
+with st.expander("🛠️ Installation & Troubleshooting"):
+    st.markdown("""
+    ### To enable plot saving functionality:
+    
+    1. **Install kaleido package:**
+    ```bash
+    pip install kaleido
+    ```
+    
+    2. **If you encounter errors when saving plots:**
+    - Make sure kaleido is installed
+    - Try restarting the app
+    - On Streamlit Cloud, kaleido should be included in requirements.txt
+    
+    ### Requirements:
+    ```txt
+    streamlit>=1.28.0
+    pandas>=2.0.0
+    numpy>=1.24.0
+    plotly>=5.17.0
+    kaleido>=0.2.0
+    ```
+    """)
