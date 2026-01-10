@@ -105,6 +105,22 @@ def parse_data(content: str) -> pd.DataFrame:
     
     return df
 
+def safe_get_stats(df, column='Value'):
+    """Безопасно получает статистику для столбца, даже если значения нечисловые"""
+    try:
+        # Пробуем преобразовать к числовому типу
+        numeric_series = pd.to_numeric(df[column], errors='coerce')
+        valid_values = numeric_series.dropna()
+        
+        if len(valid_values) > 0:
+            min_val = valid_values.min()
+            max_val = valid_values.max()
+            return f"{min_val:.2f} - {max_val:.2f}"
+        else:
+            return "N/A (no valid numbers)"
+    except:
+        return "N/A (error)"
+
 def create_pivot_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create pivot table for heatmap - preserve original order
@@ -901,8 +917,7 @@ with col2:
             st.metric("Unique X values", df['X'].nunique())
         with col_stats2:
             st.metric("Unique Y values", df['Y'].nunique())
-            st.metric("Value range", 
-                     f"{df['Value'].min():.2f} - {df['Value'].max():.2f}")
+            st.metric("Value range", safe_get_stats(df, 'Value'))
         
         st.subheader("Pivot Table")
         pivot_df = create_pivot_table(df)
@@ -1311,3 +1326,4 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
+
