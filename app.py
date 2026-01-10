@@ -24,7 +24,7 @@ from statsmodels.stats.multitest import multipletests
 import pingouin as pg
 
 # Настройка стиля для научной статьи
-plt.style.use('seaborn-whitegrid')
+plt.style.use('default')
 mpl.rcParams['font.family'] = 'sans-serif'
 mpl.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Liberation Sans']
 mpl.rcParams['axes.edgecolor'] = 'black'
@@ -1587,4 +1587,5 @@ class ScientificHeatmapApp:
 
 if __name__ == "__main__":
     app = ScientificHeatmapApp()
+
     app.run()
