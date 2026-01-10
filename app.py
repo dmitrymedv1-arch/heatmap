@@ -920,34 +920,38 @@ class ScientificHeatmapApp:
         )[1]
         
         self.colorbar_label = st.sidebar.text_input("Colorbar label", value="Expression")
-    
+
     def parse_data_text(self, content, delimiter):
         """Parse data from text"""
         try:
-            df = pd.read_csv(io.StringIO(content), delimiter=delimiter)
-            
-            if len(df.columns) == 3:
-                # Long format
-                x_col, y_col, val_col = df.columns[:3]
-                self.raw_data = df
-                self.data_matrix = df.pivot(index=x_col, columns=y_col, values=val_col)
-            elif len(df.columns) > 3:
-                # Matrix format
-                self.raw_data = df
-                self.data_matrix = df.set_index(df.columns[0])
+            # Если delimiter пробел, используем regex для обработки переменного количества пробелов
+            if delimiter == ' ':
+                df = pd.read_csv(io.StringIO(content), delimiter=r'\s+', engine='python')
             else:
-                st.error("Unsupported data format. Expected at least 3 columns.")
+                df = pd.read_csv(io.StringIO(content), delimiter=delimiter)
+            
+            # Если всего 1 столбец, пробуем разбить по пробелам
+            if len(df.columns) == 1:
+                st.warning("Detected single column. Trying to split by whitespace...")
+                df = df[df.columns[0]].str.split(r'\s+', expand=True)
+            
+            if len(df.columns) >= 3:
+                # Используем первые 3 колонки
+                x_col, y_col, val_col = df.columns[:3]
+                
+                # Пробуем преобразовать значения к числовому типу
+                try:
+                    df[val_col] = pd.to_numeric(df[val_col])
+                except:
+                    st.warning(f"Could not convert column '{val_col}' to numeric. Using as-is.")
+                
+                self.raw_data = df
+                # Pivot таблица
+                self.data_matrix = df.pivot(index=x_col, columns=y_col, values=val_col)
+            else:
+                st.error(f"Unsupported data format. Got {len(df.columns)} columns, expected at least 3 columns.")
+                st.info("Example format (X, Y, Value):\nGene1,Sample1,10.5\nGene1,Sample2,12.3")
                 return False
-            
-            # Save original data
-            self.data_matrix_original = self.data_matrix.copy()
-            
-            st.success(f"✅ Data loaded! Shape: {self.data_matrix.shape}")
-            return True
-            
-        except Exception as e:
-            st.error(f"❌ Error reading data: {e}")
-            return False
     
     def detect_delimiter(self, content):
         """Detect delimiter"""
@@ -1606,6 +1610,7 @@ if __name__ == "__main__":
     app = ScientificHeatmapApp()
 
     app.run()
+
 
 
 
