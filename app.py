@@ -1545,14 +1545,17 @@ class ScientificHeatmapApp:
         self.setup_sidebar()
         
         # Main content area
-        if st.session_state.data_loaded:
+        if st.session_state.data_loaded and self.data_matrix_original is not None:
             # Display data preview
             st.subheader("📋 Data Preview")
             col1, col2 = st.columns(2)
             
             with col1:
                 st.write("**Original Data Matrix**")
-                st.dataframe(self.data_matrix_original.head(10), use_container_width=True)
+                if self.data_matrix_original is not None:
+                    st.dataframe(self.data_matrix_original.head(10), use_container_width=True)
+                else:
+                    st.info("No data loaded yet. Please load data using the sidebar.")
             
             with col2:
                 if hasattr(self, 'processed_data'):
@@ -1562,7 +1565,15 @@ class ScientificHeatmapApp:
                         index=self.data_matrix.index,
                         columns=self.data_matrix.columns
                     )
-                    st.dataframe(display_df.head(10), use_container_width=True)
+                    if hasattr(self, 'processed_data') and self.processed_data is not None:
+                        display_df = pd.DataFrame(
+                            self.processed_data,
+                            index=self.data_matrix.index,
+                            columns=self.data_matrix.columns
+                        )
+                        st.dataframe(display_df.head(10), use_container_width=True)
+                    else:
+                        st.info("Processed data will appear here after analysis.")
             
             # Display statistics if available
             if st.session_state.analysis_done:
@@ -1589,3 +1600,4 @@ if __name__ == "__main__":
     app = ScientificHeatmapApp()
 
     app.run()
+
