@@ -643,6 +643,7 @@ class ScientificHeatmapApp:
         # Data
         self.raw_data = None
         self.data_matrix = None
+        self.data_matrix_original = None
         self.processed_data = None
         self.display_data = None
         
@@ -1545,7 +1546,7 @@ class ScientificHeatmapApp:
         self.setup_sidebar()
         
         # Main content area
-        if st.session_state.data_loaded and self.data_matrix_original is not None:
+        if st.session_state.data_loaded and hasattr(self, 'data_matrix_original') and self.data_matrix_original is not None:
             # Display data preview
             st.subheader("📋 Data Preview")
             col1, col2 = st.columns(2)
@@ -1600,4 +1601,5 @@ if __name__ == "__main__":
     app = ScientificHeatmapApp()
 
     app.run()
+
 
