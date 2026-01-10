@@ -5,8 +5,10 @@ import plotly.graph_objects as go
 import plotly.express as px
 import io
 import re
+import zipfile
+import matplotlib.pyplot as plt
+import matplotlib
 from typing import List, Optional, Tuple
-import kaleido  # Для сохранения изображений
 
 # Page configuration
 st.set_page_config(
@@ -132,7 +134,7 @@ def normalize_data(pivot_df: pd.DataFrame) -> pd.DataFrame:
     normalized_df = (pivot_df - min_val) / (max_val - min_val)
     return normalized_df
 
-def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'Viridis') -> go.Figure:
+def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis') -> go.Figure:
     """
     Create smooth contour plot (height map)
     """
@@ -187,6 +189,165 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'Viridis') -
     )
     
     return fig
+
+def plotly_to_matplotlib_figure(plotly_fig, dpi=300):
+    """Convert Plotly figure to matplotlib figure for saving"""
+    # Create matplotlib figure
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
+    
+    # This is a simplified approach - in practice, you might want to
+    # create separate matplotlib plots for each type of figure
+    # For now, we'll return a placeholder
+    return fig
+
+def save_all_plots_matplotlib(pivot_df, normalized_df, fig1, fig2, fig3, x_label, y_label, dpi=300):
+    """Save all plots using matplotlib"""
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # 1. Main Heatmap
+        fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
+        im = ax.imshow(pivot_df.values, aspect='auto', cmap='viridis')
+        
+        # Set ticks and labels
+        ax.set_xticks(np.arange(len(pivot_df.columns)))
+        ax.set_yticks(np.arange(len(pivot_df.index)))
+        ax.set_xticklabels(pivot_df.columns.tolist())
+        ax.set_yticklabels(pivot_df.index.tolist())
+        
+        # Rotate x labels for better visibility
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Value', rotation=270, labelpad=20)
+        
+        # Set labels
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title('Main Heatmap')
+        
+        # Add values to cells if requested
+        if st.session_state.get('show_values', True):
+            for i in range(len(pivot_df.index)):
+                for j in range(len(pivot_df.columns)):
+                    text = ax.text(j, i, f'{pivot_df.values[i, j]:.2f}',
+                                  ha="center", va="center", color="w", fontsize=8)
+        
+        plt.tight_layout()
+        
+        # Save to buffer
+        heatmap_buffer = io.BytesIO()
+        fig.savefig(heatmap_buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr('heatmap_main.png', heatmap_buffer.getvalue())
+        plt.close(fig)
+        
+        # 2. Normalized Heatmap (if available)
+        if normalized_df is not None:
+            fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
+            im = ax.imshow(normalized_df.values, aspect='auto', cmap='viridis', vmin=0, vmax=1)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(normalized_df.columns)))
+            ax.set_yticks(np.arange(len(normalized_df.index)))
+            ax.set_xticklabels(normalized_df.columns.tolist())
+            ax.set_yticklabels(normalized_df.index.tolist())
+            
+            # Rotate x labels for better visibility
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Normalized Value (0-1)', rotation=270, labelpad=20)
+            
+            # Set labels
+            ax.set_xlabel(x_label)
+            ax.set_ylabel(y_label)
+            ax.set_title('Normalized Heatmap (0-1)')
+            
+            # Add values to cells if requested
+            if st.session_state.get('show_values', True):
+                for i in range(len(normalized_df.index)):
+                    for j in range(len(normalized_df.columns)):
+                        text = ax.text(j, i, f'{normalized_df.values[i, j]:.3f}',
+                                      ha="center", va="center", color="w", fontsize=8)
+            
+            plt.tight_layout()
+            
+            # Save to buffer
+            norm_buffer = io.BytesIO()
+            fig.savefig(norm_buffer, format='png', dpi=dpi, bbox_inches='tight')
+            zip_file.writestr('heatmap_normalized.png', norm_buffer.getvalue())
+            plt.close(fig)
+        
+        # 3. Contour Plot
+        fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
+        
+        # Create meshgrid for contour plot
+        X, Y = np.meshgrid(np.arange(len(pivot_df.columns)), np.arange(len(pivot_df.index)))
+        
+        # Create contour plot
+        contour = ax.contourf(X, Y, pivot_df.values, cmap='viridis', levels=20)
+        
+        # Add contour lines
+        ax.contour(X, Y, pivot_df.values, colors='black', linewidths=0.5, levels=10)
+        
+        # Set ticks and labels
+        ax.set_xticks(np.arange(len(pivot_df.columns)))
+        ax.set_yticks(np.arange(len(pivot_df.index)))
+        ax.set_xticklabels(pivot_df.columns.tolist())
+        ax.set_yticklabels(pivot_df.index.tolist())
+        
+        # Rotate x labels for better visibility
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        
+        # Add colorbar
+        cbar = plt.colorbar(contour, ax=ax)
+        cbar.set_label('Value', rotation=270, labelpad=20)
+        
+        # Set labels
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title('Contour Plot')
+        
+        plt.tight_layout()
+        
+        # Save to buffer
+        contour_buffer = io.BytesIO()
+        fig.savefig(contour_buffer, format='png', dpi=dpi, bbox_inches='tight')
+        zip_file.writestr('contour_plot.png', contour_buffer.getvalue())
+        plt.close(fig)
+        
+        # 4. Surface Plot (3D)
+        if len(pivot_df.columns) > 1 and len(pivot_df.index) > 1:
+            fig = plt.figure(figsize=(12, 9), dpi=dpi)
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # Create meshgrid for 3D plot
+            X, Y = np.meshgrid(np.arange(len(pivot_df.columns)), np.arange(len(pivot_df.index)))
+            
+            # Create surface plot
+            surf = ax.plot_surface(X, Y, pivot_df.values, cmap='viridis', 
+                                  linewidth=0, antialiased=True, alpha=0.8)
+            
+            # Set labels
+            ax.set_xlabel(x_label)
+            ax.set_ylabel(y_label)
+            ax.set_zlabel('Value')
+            ax.set_title('3D Surface Plot')
+            
+            # Add colorbar
+            fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, label='Value')
+            
+            plt.tight_layout()
+            
+            # Save to buffer
+            surface_buffer = io.BytesIO()
+            fig.savefig(surface_buffer, format='png', dpi=dpi, bbox_inches='tight')
+            zip_file.writestr('surface_plot_3d.png', surface_buffer.getvalue())
+            plt.close(fig)
+    
+    return zip_buffer
 
 # Main interface
 st.title("🔥 Heatmap Generator for Scientific Publications")
@@ -245,6 +406,11 @@ with st.sidebar:
     st.subheader("Additional Plots")
     show_normalized = st.checkbox("Show normalized plot", value=True)
     show_contour = st.checkbox("Show contour map", value=True)
+    
+    # Save settings
+    st.markdown("---")
+    st.subheader("Save Settings")
+    save_dpi = st.slider("DPI for saving", 100, 600, 300)
 
 # Main area
 col1, col2 = st.columns([1, 1])
@@ -317,6 +483,7 @@ C,Feb,-15"""
                 if df is not None and not df.empty:
                     st.session_state.df = df
                     st.session_state.data_ready = True
+                    st.session_state.show_values = show_values
                 else:
                     st.error("Failed to process data. Please check the format.")
         else:
@@ -450,6 +617,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
         st.plotly_chart(fig1, use_container_width=True)
         
         # 2. NORMALIZED HEATMAP (only if all values are non-negative)
+        normalized_df = None
         if show_normalized and (pivot_df.values.min() >= 0):
             st.subheader("2. Normalized Heatmap (0-1)")
             
@@ -522,80 +690,6 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
                 fig3.update_yaxes(title_text=y_label)
                 
                 st.plotly_chart(fig3, use_container_width=True)
-                
-                # Additional contour map variants
-                st.markdown("**Contour Map Variants:**")
-                
-                col_cont1, col_cont2 = st.columns(2)
-                
-                with col_cont1:
-                    # Contour map with lines
-                    fig3_lines = go.Figure(data=go.Contour(
-                        z=pivot_df.values,
-                        x=list(range(len(pivot_df.columns))),
-                        y=list(range(len(pivot_df.index))),
-                        colorscale=selected_palette,
-                        contours=dict(
-                            coloring='lines',
-                            showlabels=True,
-                            labelfont=dict(size=10, color='black')
-                        ),
-                        line=dict(width=2),
-                        colorbar=dict(title='Value')
-                    ))
-                    
-                    fig3_lines.update_xaxes(
-                        ticktext=pivot_df.columns.tolist(),
-                        tickvals=list(range(len(pivot_df.columns))),
-                        title=x_label
-                    )
-                    fig3_lines.update_yaxes(
-                        ticktext=pivot_df.index.tolist(),
-                        tickvals=list(range(len(pivot_df.index))),
-                        title=y_label
-                    )
-                    
-                    fig3_lines.update_layout(
-                        title='Contour Map (with lines)',
-                        plot_bgcolor='white',
-                        paper_bgcolor='white',
-                        height=400
-                    )
-                    
-                    st.plotly_chart(fig3_lines, use_container_width=True)
-                
-                with col_cont2:
-                    # 3D Surface plot
-                    if len(pivot_df.columns) > 1 and len(pivot_df.index) > 1:
-                        fig3_surface = go.Figure(data=go.Surface(
-                            z=pivot_df.values,
-                            colorscale=selected_palette,
-                            contours=dict(
-                                z=dict(
-                                    show=True,
-                                    usecolormap=True,
-                                    highlightcolor="limegreen",
-                                    project=dict(z=True)
-                                )
-                            ),
-                            colorbar=dict(title='Value')
-                        ))
-                        
-                        fig3_surface.update_layout(
-                            title='3D Surface Plot',
-                            scene=dict(
-                                xaxis=dict(title=x_label, ticktext=pivot_df.columns.tolist()),
-                                yaxis=dict(title=y_label, ticktext=pivot_df.index.tolist()),
-                                zaxis=dict(title=colorbar_title),
-                                aspectmode='manual',
-                                aspectratio=dict(x=1, y=1, z=0.7)
-                            ),
-                            width=600,
-                            height=500,
-                            margin=dict(l=0, r=0, b=0, t=30)
-                        )
-                        
-                        st.plotly_chart(fig3_surface, use_container_width=True)
         
         # Export options
         st.markdown("---")
@@ -604,45 +698,31 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
         col_export1, col_export2, col_export3 = st.columns(3)
         
         with col_export1:
-            if st.button("Save All Plots"):
+            if st.button("📦 Save All Plots (ZIP)"):
                 try:
-                    # Save plots using Streamlit's download functionality
-                    import base64
-                    
-                    # Convert figures to bytes
-                    img1_bytes = fig1.to_image(format="png")
-                    img2_bytes = fig2.to_image(format="png") if 'fig2' in locals() and show_normalized and pivot_df.values.min() >= 0 else None
-                    img3_bytes = fig3.to_image(format="png") if 'fig3' in locals() and show_contour else None
-                    
-                    # Create download buttons
-                    st.download_button(
-                        label="Download Main Heatmap",
-                        data=img1_bytes,
-                        file_name="heatmap_main.png",
-                        mime="image/png"
-                    )
-                    
-                    if img2_bytes:
-                        st.download_button(
-                            label="Download Normalized Heatmap",
-                            data=img2_bytes,
-                            file_name="heatmap_normalized.png",
-                            mime="image/png"
+                    with st.spinner("Creating ZIP archive..."):
+                        # Create normalized_df if not already created
+                        if normalized_df is None and show_normalized and (pivot_df.values.min() >= 0):
+                            normalized_df = normalize_data(pivot_df)
+                        
+                        # Save all plots using matplotlib
+                        zip_buffer = save_all_plots_matplotlib(
+                            pivot_df, normalized_df, fig1, fig2, fig3, 
+                            x_label, y_label, dpi=save_dpi
                         )
-                    
-                    if img3_bytes:
+                        
+                        # Create download button for ZIP
                         st.download_button(
-                            label="Download Contour Map",
-                            data=img3_bytes,
-                            file_name="contour_map.png",
-                            mime="image/png"
+                            label="Download ZIP Archive",
+                            data=zip_buffer.getvalue(),
+                            file_name="heatmap_plots.zip",
+                            mime="application/zip"
                         )
-                    
-                    st.success("Plots are ready for download")
-                    
+                        
+                        st.success(f"All plots saved with {save_dpi} DPI resolution!")
+                        
                 except Exception as e:
                     st.error(f"Error saving plots: {e}")
-                    st.info("Note: Plot saving requires the kaleido package. Install it with: pip install kaleido")
                     
         with col_export2:
             # Export data
@@ -731,28 +811,3 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
-
-# Add installation instructions in an expander
-with st.expander("🛠️ Installation & Troubleshooting"):
-    st.markdown("""
-    ### To enable plot saving functionality:
-    
-    1. **Install kaleido package:**
-    ```bash
-    pip install kaleido
-    ```
-    
-    2. **If you encounter errors when saving plots:**
-    - Make sure kaleido is installed
-    - Try restarting the app
-    - On Streamlit Cloud, kaleido should be included in requirements.txt
-    
-    ### Requirements:
-    ```txt
-    streamlit>=1.28.0
-    pandas>=2.0.0
-    numpy>=1.24.0
-    plotly>=5.17.0
-    kaleido>=0.2.0
-    ```
-    """)
