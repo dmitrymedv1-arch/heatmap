@@ -394,7 +394,7 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
             text_matrix = text_matrix.astype(str)
         else:
             text_matrix = None
-        
+
         fig1 = go.Figure(data=go.Heatmap(
             z=pivot_df.values,
             x=pivot_df.columns.tolist(),
@@ -405,12 +405,15 @@ if 'df' in st.session_state and st.session_state.get('data_ready', False):
             hoverongaps=False,
             hoverinfo='x+y+z',
             colorbar=dict(
-                title={
-                    'text': colorbar_title,
-                    'font': {'size': colorbar_font_size, 'color': 'black'}
-                },
-                tickfont={'size': colorbar_font_size-2, 'color': 'black'}
-            )
+                title=dict(
+                    text=colorbar_title,
+                    font=dict(size=colorbar_font_size, color='black')
+                ),
+                tickfont=dict(size=colorbar_font_size-2, color='black')
+            ),
+            xgap=1,
+            ygap=1
+        ))
         
         # Настройка макета для основного графика
         fig1.update_layout(
@@ -710,6 +713,7 @@ st.markdown("---")
 st.markdown("""
 **Приложение для генерации тепловых карт** | Оптимизировано для научных публикаций
 """)
+
 
 
 
