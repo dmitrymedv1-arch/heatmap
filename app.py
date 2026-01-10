@@ -269,21 +269,17 @@ def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                 tickfont=dict(color='black')
             )
         ))
-        
+
         fig_3d.update_layout(
             title='3D Surface Plot',
             scene=dict(
                 xaxis=dict(
                     title=x_label, 
-                    ticktext=pivot_df.columns.tolist(),
-                    tickvals=list(range(len(pivot_df.columns))),
                     titlefont=dict(color='black', size=12),
                     tickfont=dict(color='black')
                 ),
                 yaxis=dict(
                     title=y_label, 
-                    ticktext=pivot_df.index.tolist(),
-                    tickvals=list(range(len(pivot_df.index))),
                     titlefont=dict(color='black', size=12),
                     tickfont=dict(color='black')
                 ),
@@ -1321,3 +1317,4 @@ st.markdown("---")
 st.markdown("""
 **Heatmap Generator for Scientific Publications** | Optimized for research papers
 """)
+
