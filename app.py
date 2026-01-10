@@ -9,11 +9,12 @@ import re
 import zipfile
 import matplotlib.pyplot as plt
 import matplotlib
+from typing import List, Optional, Tuple, Dict, Any
 from scipy import stats
 from scipy.ndimage import gaussian_filter
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, leaves_list
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -541,7 +542,7 @@ def create_smooth_contour(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
 
 def create_additional_plots(pivot_df: pd.DataFrame, colorscale: str = 'viridis',
                            x_label: str = "X", y_label: str = "Y",
-                           colorbar_title: str = "Value") -> List:
+                           colorbar_title: str = "Value") -> List[tuple]:
     """Create all additional plots from original code"""
     plots = []
     
@@ -1944,3 +1945,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
