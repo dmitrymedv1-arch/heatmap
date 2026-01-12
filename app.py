@@ -1047,9 +1047,13 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, settings: PlotSettings,
 
 # Main interface
 def main():
-    # Инициализация настроек
-    settings = PlotSettings()
+    # Инициализация настроек в session_state если их еще нет
+    if 'settings' not in st.session_state:
+        st.session_state.settings = PlotSettings()
     
+    # Используем настройки из session_state
+    settings = st.session_state.settings
+
     st.title("🔥 Heatmap Generator for Scientific Publications")
     st.markdown("""
     Upload data in X,Y,Value format (comma, tab or space separated) or use example data.
@@ -1416,4 +1420,5 @@ C,Feb,-15"""
     
 if __name__ == "__main__":
     main()
+
 
