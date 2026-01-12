@@ -928,7 +928,7 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, settings: PlotSettings,
             fig.savefig(norm_buffer, format='png', dpi=dpi, bbox_inches='tight')
             zip_file.writestr('2_heatmap_normalized.png', norm_buffer.getvalue())
             plt.close(fig)
-        
+
         # 3. Contour Plot
         fig, ax = plt.subplots(figsize=(10, 8), dpi=dpi)
         
@@ -937,57 +937,71 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, settings: PlotSettings,
         if np.isnan(contour_data).any():
             contour_data = np.nan_to_num(contour_data)
         
-        # Create meshgrid for contour plot
-        X, Y = np.meshgrid(np.arange(len(pivot_df.columns)) + 0.5, 
-                          np.arange(len(pivot_df.index)) + 0.5)
-        
         # Apply smoothing if requested
         if settings.contour_smoothing > 0:
+            # Apply Gaussian smoothing first
             contour_data = gaussian_filter(contour_data, sigma=settings.contour_smoothing)
-        
-        # Create contour plot
-        contour = ax.contourf(X, Y, contour_data, cmap=cmap, levels=20)
-        
-        # Add contour lines if requested
-        if settings.show_contour_lines:
-            ax.contour(X, Y, contour_data, colors='black', linewidths=0.5, levels=10)
-        
-        # Set ticks and labels
-        ax.set_xticks(np.arange(len(pivot_df.columns)) + 0.5)
-        ax.set_yticks(np.arange(len(pivot_df.index)) + 0.5)
-        ax.set_xticklabels(pivot_df.columns.tolist())
-        ax.set_yticklabels(pivot_df.index.tolist())
-        
-        # Rotate x labels for better visibility
-        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-        
-        # Add colorbar with vertical orientation
-        cbar = plt.colorbar(contour, ax=ax, orientation='vertical')
-        cbar.set_label(settings.colorbar_title, rotation=270, labelpad=20, 
-                      fontsize=settings.colorbar_font_size, color='black')
-        cbar.ax.tick_params(colors='black')
-        cbar.ax.yaxis.label.set_color('black')
-        
-        # Set labels with black color
-        ax.set_xlabel(settings.x_label, fontsize=settings.axis_font_size, color='black')
-        ax.set_ylabel(settings.y_label, fontsize=settings.axis_font_size, color='black')
-        ax.set_title('Contour Plot', fontsize=16, color='black')
-        
-        # Set axis colors
-        ax.spines['bottom'].set_color('black')
-        ax.spines['top'].set_color('black')
-        ax.spines['left'].set_color('black')
-        ax.spines['right'].set_color('black')
-        ax.tick_params(axis='x', colors='black', labelsize=settings.tick_font_size)
-        ax.tick_params(axis='y', colors='black', labelsize=settings.tick_font_size)
-        
-        plt.tight_layout()
-        
-        # Save to buffer
-        contour_buffer = io.BytesIO()
-        fig.savefig(contour_buffer, format='png', dpi=dpi, bbox_inches='tight')
-        zip_file.writestr('3_contour_plot.png', contour_buffer.getvalue())
-        plt.close(fig)
+            
+            # Use higher resolution for smoother contours
+            # Определяем коэффициент увеличения разрешения в зависимости от уровня сглаживания
+            resolution_factor = int(settings.contour_smoothing * 2) + 1
+            resolution_factor = min(resolution_factor, 4)  # Ограничиваем максимальное увеличение
+            
+            # Создаем более плотную сетку
+            x_original = np.arange(len(pivot_df.columns)) + 0.5
+            y_original = np.arange(len(pivot_df.index)) + 0.5
+            
+            x_fine = np.linspace(0.5, len(pivot_df.columns) - 0.5, len(pivot_df.columns) * resolution_factor)
+            y_fine = np.linspace(0.5, len(pivot_df.index) - 0.5, len(pivot_df.index) * resolution_factor)
+            X_fine, Y_fine = np.meshgrid(x_fine, y_fine)
+            
+            # Интерполируем на более плотную сетку
+            try:
+                from scipy.interpolate import griddata
+                # Создаем точки для интерполяции
+                points = np.array([[x, y] for y in y_original for x in x_original])
+                values = contour_data.flatten()
+                
+                # Интерполируем на более плотную сетку
+                contour_data_fine = griddata(points, values, (X_fine, Y_fine), method='cubic')
+                
+                # Заменяем возможные NaN значения после интерполяции
+                if np.isnan(contour_data_fine).any():
+                    contour_data_fine = np.nan_to_num(contour_data_fine)
+                
+                # Создаем контурный график
+                contour = ax.contourf(X_fine, Y_fine, contour_data_fine, cmap=cmap, levels=50)
+                
+                # Добавляем контурные линии
+                if settings.show_contour_lines:
+                    ax.contour(X_fine, Y_fine, contour_data_fine, colors='black', linewidths=0.5, levels=15)
+                    
+            except ImportError:
+                # Fallback если scipy.interpolate.griddata не доступен
+                from scipy import interpolate
+                interp_func = interpolate.interp2d(x_original, y_original, contour_data, kind='cubic')
+                contour_data_fine = interp_func(x_fine, y_fine)
+                contour = ax.contourf(X_fine, Y_fine, contour_data_fine, cmap=cmap, levels=50)
+                
+                if settings.show_contour_lines:
+                    ax.contour(X_fine, Y_fine, contour_data_fine, colors='black', linewidths=0.5, levels=15)
+                    
+            except Exception as e:
+                # Ultimate fallback - используем обычный контур со сглаживанием
+                X, Y = np.meshgrid(x_original, y_original)
+                contour = ax.contourf(X, Y, contour_data, cmap=cmap, levels=30)
+                
+                if settings.show_contour_lines:
+                    ax.contour(X, Y, contour_data, colors='black', linewidths=0.5, levels=15)
+                    
+        else:
+            # No smoothing - use original resolution
+            X, Y = np.meshgrid(np.arange(len(pivot_df.columns)) + 0.5, 
+                              np.arange(len(pivot_df.index)) + 0.5)
+            contour = ax.contourf(X, Y, contour_data, cmap=cmap, levels=20)
+            
+            if settings.show_contour_lines:
+                ax.contour(X, Y, contour_data, colors='black', linewidths=0.5, levels=10)
         
         # Save additional plots
         plot_counter = 4
@@ -1420,5 +1434,6 @@ C,Feb,-15"""
     
 if __name__ == "__main__":
     main()
+
 
 
