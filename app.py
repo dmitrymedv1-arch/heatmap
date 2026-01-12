@@ -1047,6 +1047,9 @@ def save_all_plots_matplotlib(pivot_df, normalized_df, settings: PlotSettings,
 
 # Main interface
 def main():
+    # Инициализация настроек
+    settings = PlotSettings()
+    
     st.title("🔥 Heatmap Generator for Scientific Publications")
     st.markdown("""
     Upload data in X,Y,Value format (comma, tab or space separated) or use example data.
@@ -1141,69 +1144,69 @@ def main():
         
         if example_choice == "Example 1: Simple":
             example_data = """X,Y,Value
-    A,Jan,10
-    A,Feb,20
-    B,Jan,15
-    B,Feb,25"""
+A,Jan,10
+A,Feb,20
+B,Jan,15
+B,Feb,25"""
         elif example_choice == "Example 2: Temperature data":
             example_data = """X,Y,Value
-    Method1,25,0.1
-    Method1,50,0.2
-    Method1,100,0.3
-    Method1,150,0.4
-    Method1,200,0.5
-    Method1,250,0.6
-    Method1,300,0.7
-    Method1,350,0.8
-    Method1,400,0.9
-    Method1,450,1.0
-    Method1,500,1.1
-    Method1,550,1.2
-    Method1,600,1.3
-    Method1,650,1.4
-    Method1,700,1.5
-    Method1,750,1.6
-    Method1,800,1.7
-    Method1,850,1.8
-    Method1,900,1.9
-    Method1,950,2.0
-    Method1,1000,2.1
-    Method2,25,0.15
-    Method2,50,0.25
-    Method2,100,0.35
-    Method2,150,0.45
-    Method2,200,0.55
-    Method2,250,0.65
-    Method2,300,0.75
-    Method2,350,0.85
-    Method2,400,0.95
-    Method2,450,1.05
-    Method2,500,1.15
-    Method2,550,1.25
-    Method2,600,1.35
-    Method2,650,1.45
-    Method2,700,1.55
-    Method2,750,1.65
-    Method2,800,1.75
-    Method2,850,1.85
-    Method2,900,1.95
-    Method2,950,2.05
-    Method2,1000,2.15"""
+Method1,25,0.1
+Method1,50,0.2
+Method1,100,0.3
+Method1,150,0.4
+Method1,200,0.5
+Method1,250,0.6
+Method1,300,0.7
+Method1,350,0.8
+Method1,400,0.9
+Method1,450,1.0
+Method1,500,1.1
+Method1,550,1.2
+Method1,600,1.3
+Method1,650,1.4
+Method1,700,1.5
+Method1,750,1.6
+Method1,800,1.7
+Method1,850,1.8
+Method1,900,1.9
+Method1,950,2.0
+Method1,1000,2.1
+Method2,25,0.15
+Method2,50,0.25
+Method2,100,0.35
+Method2,150,0.45
+Method2,200,0.55
+Method2,250,0.65
+Method2,300,0.75
+Method2,350,0.85
+Method2,400,0.95
+Method2,450,1.05
+Method2,500,1.15
+Method2,550,1.25
+Method2,600,1.35
+Method2,650,1.45
+Method2,700,1.55
+Method2,750,1.65
+Method2,800,1.75
+Method2,850,1.85
+Method2,900,1.95
+Method2,950,2.05
+Method2,1000,2.15"""
         elif example_choice == "Example 3: With gaps":
             example_data = """A\t1\t0.2
-    \t2\t0.3
-    \t3\t0.4
-    B\t1\t0.25
-    \t2\t0.35
-    \t3\t0.45"""
+\t2\t0.3
+\t3\t0.4
+B\t1\t0.25
+\t2\t0.35
+\t3\t0.45"""
         elif example_choice == "Example 4: Negative values":
             example_data = """X,Y,Value
-    A,Jan,-10
-    A,Feb,20
-    B,Jan,15
-    B,Feb,-5
-    C,Jan,30
-    C,Feb,-15"""
+A,Jan,-10
+A,Feb,20
+B,Jan,15
+B,Feb,-5
+C,Jan,30
+C,Feb,-15"""
         else:
             example_data = ""
         
@@ -1409,7 +1412,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     **Heatmap Generator for Scientific Publications** | Optimized for research papers
-    """)
-
+    """)          
+    
 if __name__ == "__main__":
     main()
+
